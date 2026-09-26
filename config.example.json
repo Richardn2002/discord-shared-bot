@@ -1,0 +1,12 @@
+{
+  "token": "PASTE_YOUR_BOT_TOKEN_HERE",
+  "access_token": "PICK_A_LONG_RANDOM_STRING_AND_SHARE_IT_WITH_FRIENDS",
+  "listen": "127.0.0.1",
+  "port": 8000,
+  "domain": "https://your.host.example/bot",
+  "files_dir": "files",
+  "site_title": "🤖 shared-bot",
+  "font_ui": "-apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
+  "font_code": "\"SF Mono\", \"Cascadia Code\", Consolas, monospace",
+  "log_level": "INFO"
+}

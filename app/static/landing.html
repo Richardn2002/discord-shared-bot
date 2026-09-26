@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{SITE_TITLE}}</title>
+  <link rel="stylesheet" href="static/app.css">
+  {{HEAD_EXTRA}}
+  <style>
+    main.wrap { max-width: 780px; margin: 0 auto; padding: 24px 20px 80px; }
+    header.hero { padding: 48px 0 10px; }
+    h1 { font-size: 32px; margin: 0 0 12px; }
+    h2 { font-size: 20px; margin: 40px 0 10px; }
+    p { margin: 10px 0; }
+    .lead { font-size: 18px; color: var(--text-dim); }
+    a { color: var(--accent); }
+    pre { background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.6;
+      font-family: var(--font-code); }
+    .cta { display: inline-block; background: var(--accent); color: #fff !important;
+      padding: 11px 24px; border-radius: 9px; text-decoration: none; font-weight: 600; margin-top: 8px; }
+    .cta:hover { background: var(--accent-hover); }
+    .fine { color: var(--text-dim); font-size: 13px; }
+    .dim { color: var(--text-dim); }
+    ul li { margin: 6px 0; }
+    .oneliner { position: relative; }
+    .oneliner pre { white-space: pre-wrap; word-break: break-word; padding-right: 76px; font-size: 12.5px; }
+    .oneliner button { position: absolute; top: 10px; right: 10px; background: var(--accent);
+      color: #fff; border: none; border-radius: 7px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; }
+    .oneliner button:hover { background: var(--accent-hover); }
+  </style>
+</head>
+<body>
+  <header id="topbar">
+    <a class="brand" href="./">{{SITE_TITLE}}</a>
+    <nav>
+      <a href="app#/" data-nav="dashboard">Projects</a>
+      <a href="app#/packages" data-nav="packages">Packages</a>
+      <a href="./" class="active" data-i18n="nav_about">About</a>
+    </nav>
+    <span id="auth-badge" class="badge badge-muted" title="access">…</span>
+    <span id="bot-status" class="badge badge-muted" title="bot status">loading…</span>
+  </header>
+
+  <main class="wrap">
+    <header class="hero">
+      <h1>{{SITE_TITLE}}</h1>
+      <p class="lead" data-i18n="hero_lead"></p>
+      <a class="cta" href="app" data-i18n="cta_open"></a>
+      <p class="fine" data-i18n="cta_note"></p>
+    </header>
+
+    <h2 data-i18n="h_console"></h2>
+    <p data-i18n="console_body"></p>
+
+    <h2 data-i18n="h_events"></h2>
+    <p data-i18n="events_body"></p>
+    <pre>on_message(message)
+on_message_edit(message)
+on_message_delete(message)
+on_reaction_add(reaction)
+on_reaction_remove(reaction)
+on_failure(event_name, event_data, error)   # optional</pre>
+    <p class="dim" data-i18n="events_note"></p>
+
+    <h2 data-i18n="h_helpers"></h2>
+    <p data-i18n="helpers_body"></p>
+    <pre>send(text)                        # post a message
+reply(text)                       # reply to the triggering message
+add_reaction(emoji)               # react to the message
+send_embed(title=..., description=..., ...)
+send_file(filename, content)
+log(msg) / print(...)             # project console
+kv_get / kv_set / kv_delete / kv_keys / kv_all</pre>
+    <p class="dim" data-i18n="helpers_note"></p>
+
+    <h2 data-i18n="h_behavior"></h2>
+    <ul>
+      <li data-i18n="b_merge"></li>
+      <li data-i18n="b_timeout"></li>
+      <li data-i18n="b_deploy"></li>
+      <li data-i18n="b_test"></li>
+    </ul>
+
+    <h2 data-i18n="h_agents"></h2>
+    <p><span data-i18n="agents_body"></span>
+      <a href="static/agent-guide.md">{{DOMAIN}}/static/agent-guide.md</a></p>
+    <p class="dim" data-i18n="agents_hint"></p>
+    <div class="oneliner">
+      <button onclick="navigator.clipboard.writeText(document.getElementById('ol').textContent).then(()=>{this.textContent='copied!'})">copy</button>
+<pre id="ol">Read {{DOMAIN}}/static/agent-guide.md and use it to develop for my shared Discord bot at {{DOMAIN}}. My access token is "PASTE_TOKEN_HERE". Work on the project "PASTE_PROJECT_SLUG" (create it if it doesn't exist, with a fitting nickname). I want it to: DESCRIBE_WHAT_IT_SHOULD_DO_HERE. Test and debug everything through the API exactly like the guide says; only deploy once it works.</pre>
+    </div>
+
+    <h2 data-i18n="h_ready"></h2>
+    <p><a class="cta" href="app" data-i18n="cta_open"></a></p>
+    <p class="fine" data-i18n="ready_note"></p>
+  </main>
+
+  <div id="toast-root"></div>
+  <script src="static/i18n.js"></script>
+  <script src="static/site.js"></script>
+  <script>
+    (async () => {
+      await initAuth();
+      applyI18n();
+      window.addEventListener("langchange", () => applyI18n());
+    })();
+  </script>
+</body>
+</html>

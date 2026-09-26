@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{SITE_TITLE}}</title>
+  <link rel="stylesheet" href="static/app.css">
+  {{HEAD_EXTRA}}
+</head>
+<body>
+  <header id="topbar">
+    <a class="brand" href="#/">{{SITE_TITLE}}</a>
+    <nav>
+      <a href="#/" data-nav="dashboard">Projects</a>
+      <a href="#/packages" data-nav="packages">Packages</a>
+      <a href="./" data-i18n="nav_about" title="what is this?">About</a>
+    </nav>
+    <span id="auth-badge" class="badge badge-muted" title="access">…</span>
+    <span id="bot-status" class="badge badge-muted" title="bot status">loading…</span>
+  </header>
+  <main id="view"></main>
+  <div id="toast-root"></div>
+  <script src="static/i18n.js"></script>
+  <script src="static/site.js"></script>
+  <script src="static/monaco/vs/loader.js"></script>
+  <script src="static/app.js"></script>
+</body>
+</html>
