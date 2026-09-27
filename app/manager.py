@@ -43,6 +43,7 @@ class Worker:
         self.init_error: str | None = None
         self.last_error: str | None = None
         self._killed_intentionally = False
+        self.disabled = False         # true after an explicit Stop; events skip it
 
     # -- lifecycle ---------------------------------------------------------
     async def ensure_started(self) -> None:
@@ -259,19 +260,42 @@ class Manager:
     def status(self, slug: str) -> dict:
         w = self.workers.get(slug)
         if not w:
-            return {"state": "sleeping"}
+            return {"state": "sleeping", "disabled": False}
         return {
             "state": w.state,
+            "disabled": w.disabled,
             "pid": w.proc.pid if w.proc and w.proc.returncode is None else None,
             "init_error": w.init_error,
             "busy": w.lock.locked(),
         }
+
+    async def set_running(self, slug: str, running: bool) -> dict:
+        """Explicitly start/stop a project's worker. A stopped project stays
+        stopped for incoming events until started again."""
+        project = projects.get(slug)
+        w = self._worker_for(project)
+        if running:
+            if not project.deployed:
+                raise projects.ProjectError("project is not deployed yet")
+            w.disabled = False
+            try:
+                await asyncio.wait_for(w.ensure_started(), timeout=20)
+            except Exception:
+                pass  # state/init_error in status tells the story
+            projects.console_append(project, "worker start requested")
+        else:
+            w.disabled = True
+            await w._kill()
+            w.state = "stopped"  # type: ignore
+            projects.console_append(project, "worker stopped by user")
+        return self.status(slug)
 
     async def restart(self, slug: str) -> dict:
         project = projects.get(slug)
         w = self._worker_for(project)
         await w._kill()
         w.state = "stopped"  # type: ignore
+        w.disabled = False
         if project.deployed:
             try:
                 await asyncio.wait_for(w.ensure_started(), timeout=20)
@@ -301,6 +325,8 @@ class Manager:
         if executor is None:
             raise RuntimeError("no executor available (bot offline)")
         deployed = [p for p in projects.list_all() if p.deployed]
+        deployed = [p for p in deployed
+                    if not (self.workers.get(p.slug) and self.workers[p.slug].disabled)]
         trace = {"event": event, "projects": {}, "messages_sent": [], "flush": None}
         if not deployed:
             trace["flush"] = "no deployed projects"

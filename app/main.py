@@ -201,6 +201,22 @@ async def restart_project(slug: str):
     return await manager.restart(slug)
 
 
+@app.post("/api/projects/{slug}/worker")
+async def worker_control(slug: str, payload: dict = Body(...)):
+    _project_or_404(slug)
+    action = payload.get("action")
+    try:
+        if action == "start":
+            return await manager.set_running(slug, True)
+        if action == "stop":
+            return await manager.set_running(slug, False)
+        if action == "restart":
+            return await manager.restart(slug)
+    except projects.ProjectError as e:
+        raise HTTPException(400, str(e))
+    raise HTTPException(400, "action must be start/stop/restart")
+
+
 @app.post("/api/projects/{slug}/test")
 async def test_project(slug: str, payload: dict = Body(...)):
     p = _project_or_404(slug)

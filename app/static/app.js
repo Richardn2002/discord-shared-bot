@@ -107,6 +107,21 @@ function runCleanup() { cleanupFns.forEach((f) => { try { f(); } catch {} }); cl
 // ---------------------------------------------------------------------------
 // views: dashboard
 // ---------------------------------------------------------------------------
+async function workerAction(slug, action) {
+  try {
+    const r = await api("POST", `api/projects/${slug}/worker`, { action });
+    toast(`${slug}: ${action} → ${r.state || "?"}`, r.state === "broken" ? "error" : "ok");
+    return r;
+  } catch (e) { toast(e.message, "error"); }
+}
+
+function serviceCell(p) {
+  const stopped = p.runtime && (p.runtime.disabled || p.runtime.state === "stopped");
+  return stopped
+    ? h("button", { class: "small", onclick: async () => { await workerAction(p.slug, "start"); renderDashboard(); } }, "start")
+    : h("button", { class: "secondary small", onclick: async () => { await workerAction(p.slug, "stop"); renderDashboard(); } }, "stop");
+}
+
 async function renderDashboard() {
   const [status, projects] = await Promise.all([
     api("GET", "api/status"), api("GET", "api/projects"),
@@ -136,6 +151,7 @@ async function renderDashboard() {
     h("td", null, p.deployed ? badge("deployed", "green") : badge("draft only", "muted")),
     h("td", null, stateBadge(p.runtime && p.runtime.state)),
     h("td", { class: "dim" }, `timeout ${p.timeout}s · tolerance ${p.tolerance}s`),
+    h("td", { class: "row-actions" }, serviceCell(p)),
   ));
 
   const projectsCard = h("div", { class: "card" },
@@ -143,7 +159,7 @@ async function renderDashboard() {
     projects.length
       ? h("table", null,
           h("tr", null, h("th", null, "Project"), h("th", null, "Author"),
-            h("th", null, "Code"), h("th", null, "Worker"), h("th", null, "Limits")),
+            h("th", null, "Code"), h("th", null, "Worker"), h("th", null, "Limits"), h("th", null, "Service")),
           rows)
       : h("p", { class: "hint" }, "No projects yet. Create one below."),
   );
@@ -194,14 +210,16 @@ async function renderPackages() {
         pkgs.map((p) => h("tr", null,
           h("td", { class: "mono" }, p.name),
           h("td", { class: "mono dim" }, p.version),
-          h("td", { class: "row-actions" }, h("button", {
-            class: "danger small",
-            onclick: async () => {
-              if (!confirm(`Uninstall ${p.name}? Workers currently using it may crash.`)) return;
-              await showResult(await api("POST", "api/packages/uninstall", { name: p.name }));
-              renderList();
-            },
-          }, "uninstall")),
+          h("td", { class: "row-actions" }, p.protected
+            ? h("button", { class: "core small", disabled: "", title: "platform dependency — the bot platform needs it" }, "core")
+            : h("button", {
+              class: "danger small",
+              onclick: async () => {
+                if (!confirm(`Uninstall ${p.name}? Workers currently using it may crash.`)) return;
+                await showResult(await api("POST", "api/packages/uninstall", { name: p.name }));
+                renderList();
+              },
+            }, "uninstall")),
         ))),
     );
   }
@@ -640,7 +658,12 @@ async function projectSettingsTab(root, info) {
   restartBtn.onclick = async () => {
     const r = await api("POST", `api/projects/${slug}/restart`);
     toast("worker state: " + (r.state || "?"), r.state === "broken" ? "error" : "ok");
+    renderProject(slug, "settings");
   };
+  const startBtn = h("button", null, "Start");
+  startBtn.onclick = async () => { await workerAction(slug, "start"); renderProject(slug, "settings"); };
+  const stopBtn = h("button", { class: "secondary" }, "Stop");
+  stopBtn.onclick = async () => { await workerAction(slug, "stop"); renderProject(slug, "settings"); };
 
   const delBtn = h("button", { class: "danger" }, "Delete project");
   delBtn.onclick = async () => {
@@ -664,8 +687,8 @@ async function projectSettingsTab(root, info) {
         saveBtn)),
     h("div", { class: "card" },
       h("h2", null, "Maintenance"),
-      h("div", { class: "form-row" }, restartBtn,
-        h("span", { class: "hint" }, "Restarting reloads handler.py and picks up newly installed packages."))),
+      h("div", { class: "form-row" }, startBtn, stopBtn, restartBtn,
+        h("span", { class: "hint" }, "Stop pauses this project's event handling (it stays stopped until started). Restart reloads handler.py and picks up newly installed packages."))),
     h("div", { class: "card" },
       h("h2", null, "Danger zone"),
       h("div", { class: "form-row" }, delBtn)),

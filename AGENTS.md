@@ -80,3 +80,12 @@ Very good work! I tested with a real app token and everything went well. Slight 
 - landing page and cheatsheet should support both english and simplified chinese, make a switch button
 
 finally, I will be deploying this behind nginx on my cloud server, which is behind cloudflare full TLS, using cloudflare certificates. I plan to host under https://discord.richardn.me/bot/. give me the nginx conf file content to use in your final message
+
+
+My friends are already using the platform, nice work. Other things to implement:
+- both in dashboard view and project settings maintainence view, implement service stop and start
+- in packages view, prevent core requirements from being uninstalled (mark and grey the button out)
+- in about, link to now published source https://github.com/Richardn2002/discord-shared-bot
+- expand meido example to showcase embedded and file attach functionalities, you can be creative
+
+make sure transitive dependencies of system dependencies can't be uninstalled also
