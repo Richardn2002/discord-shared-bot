@@ -20,6 +20,12 @@ from .config import APP_DIR, CONFIG, ROOT_DIR
 
 MAX_DISCORD_LEN = 2000
 
+# Worker protocol lines carry base64 payloads (attached files/embeds), so they
+# can be much larger than asyncio's 64 KiB default StreamReader limit. Without
+# this, any single action above ~48 KiB makes the reader give up and the worker
+# look like it crashed.
+MAX_WORKER_LINE = 64 * 1024 * 1024
+
 
 def _console(project, line, level="INFO"):
     projects.console_append(project, line, level)
@@ -62,6 +68,7 @@ class Worker:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=MAX_WORKER_LINE,
                 cwd=str(ROOT_DIR),
             )
         except Exception:
