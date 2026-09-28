@@ -157,10 +157,10 @@ async function renderDashboard() {
   const projectsCard = h("div", { class: "card" },
     h("h2", null, "Projects"),
     projects.length
-      ? h("table", null,
+      ? h("div", { class: "tablewrap" }, h("table", null,
           h("tr", null, h("th", null, "Project"), h("th", null, "Author"),
             h("th", null, "Code"), h("th", null, "Worker"), h("th", null, "Limits"), h("th", null, "Service")),
-          rows)
+          rows))
       : h("p", { class: "hint" }, "No projects yet. Create one below."),
   );
 
@@ -205,6 +205,7 @@ async function renderPackages() {
     const pkgs = await api("GET", "api/packages");
     listCard.replaceChildren(
       h("h2", null, `Installed (${pkgs.length})`),
+      h("div", { class: "tablewrap" },
       h("table", null,
         h("tr", null, h("th", null, "Package"), h("th", null, "Version"), h("th", null, "")),
         pkgs.map((p) => h("tr", null,
@@ -220,7 +221,7 @@ async function renderPackages() {
                 renderList();
               },
             }, "uninstall")),
-        ))),
+        )))),
     );
   }
 
@@ -420,10 +421,10 @@ async function projectCheatsheetTab(root, info) {
   root.replaceChildren(...sections.map((sec) => {
     const card = h("div", { class: "card" }, h("h2", null, sec.title));
     if (sec.rows) {
-      card.append(h("table", { class: "tools" },
+      card.append(h("div", { class: "tablewrap" }, h("table", { class: "tools" },
         h("tbody", null, sec.rows.map(([sig, desc]) => h("tr", null,
           h("td", { class: "mono", style: "white-space:nowrap; vertical-align:top; padding-right:14px" }, sig),
-          h("td", { class: "dim" }, desc))))));
+          h("td", { class: "dim" }, desc)))))));
     }
     if (sec.note) card.append(h("p", { class: "hint" }, sec.note));
     if (sec.bullets) card.append(h("ul", null, sec.bullets.map((b) => h("li", null, b))));
@@ -432,27 +433,200 @@ async function projectCheatsheetTab(root, info) {
 }
 
 // --- test tab ----------------------------------------------------------------
+
+// recursively build form fields for the payload object; every leaf input
+// carries data-path + data-kind so the object can be reassembled losslessly
+function uiField(label, value, path) {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const fs = h("fieldset", { class: "ui-fieldset" }, h("legend", null, label));
+    Object.entries(value).forEach(([k, v]) => fs.append(uiField(k, v, path + "." + k)));
+    return fs;
+  }
+  let input;
+  if (Array.isArray(value)) {
+    input = h("input", { class: "mono", value: JSON.stringify(value),
+                         "data-path": path, "data-kind": "json", title: "JSON value" });
+  } else if (typeof value === "boolean") {
+    input = h("input", { type: "checkbox", "data-path": path, "data-kind": "bool" });
+    input.checked = value;
+  } else if (typeof value === "number") {
+    input = h("input", { type: "number", step: "any", value: String(value),
+                         "data-path": path, "data-kind": "number" });
+  } else if (value === null) {
+    input = h("input", { placeholder: "null", "data-path": path, "data-kind": "nullish" });
+  } else if (label === "content" || label === "old_content") {
+    // message text can be multiline
+    input = h("textarea", { rows: 2, style: "width:100%", "data-path": path, "data-kind": "string" });
+    input.value = String(value);
+  } else {
+    input = h("input", { value: String(value), "data-path": path, "data-kind": "string" });
+  }
+  return h("label", { class: "field" }, label, input);
+}
+
+function serializeUI(container) {
+  const obj = {};
+  const inputs = container.querySelectorAll("[data-path]");
+  for (const inp of inputs) {
+    const parts = inp.dataset.path.split(".");
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+      cur[parts[i]] = cur[parts[i]] || {};
+      cur = cur[parts[i]];
+    }
+    const kind = inp.dataset.kind;
+    let val;
+    if (kind === "bool") val = inp.checked;
+    else if (kind === "number") val = inp.value === "" ? null : Number(inp.value);
+    else if (kind === "nullish") {
+      if (inp.value === "") val = null;
+      else { try { val = JSON.parse(inp.value); } catch { val = inp.value; } }
+    } else if (kind === "json") {
+      try { val = JSON.parse(inp.value); }
+      catch { throw new Error(`field "${inp.dataset.path}" is not valid JSON`); }
+    } else val = inp.value;
+    cur[parts[parts.length - 1]] = val;
+  }
+  return obj;
+}
+
+// render one framework action as discord-ish UI; every field stays visible.
+function actionCard(a, nickname) {
+  const metaParts = [];
+  const meta = (skip) => Object.entries(a)
+    .filter(([k]) => !["action", ...skip].includes(k))
+    .map(([k, v]) => `${k}: ${k === "data_b64" ? `<${String(v).length} chars>` : JSON.stringify(v)}`)
+    .join("  ·  ");
+
+  if (a.action === "send" && a.embed) {
+    const e = a.embed;
+    const color = typeof e.color === "number" ? "#" + e.color.toString(16).padStart(6, "0") : "#5865f2";
+    return h("div", { class: "action-card" },
+      h("div", { class: "action-kind" }, `${nickname} · send_embed`),
+      h("div", { class: "embed-card", style: `border-left-color:${color}` },
+        e.title ? h("div", { class: "embed-title" }, e.title) : null,
+        e.description ? h("div", { class: "embed-desc" }, e.description) : null,
+        (e.fields || []).length ? h("div", { class: "embed-fields" },
+          e.fields.map((f) => h("div", { class: "embed-field",
+            style: f.inline === false ? "grid-column: 1 / -1" : "" },
+            h("div", { class: "fname" }, f.name), h("div", { class: "fvalue" }, f.value)))) : null),
+      h("div", { class: "action-meta" }, `color: ${color}` + (meta(["embed"]) ? "  ·  " + meta(["embed"]) : "")));
+  }
+
+  if (a.action === "send" && a.file) {
+    const bytes = Uint8Array.from(atob(a.file.data_b64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes]));
+    onCleanup(() => URL.revokeObjectURL(url));
+    return h("div", { class: "action-card" },
+      h("div", { class: "action-kind" }, `${nickname} · send_file`),
+      h("div", { class: "file-chip" }, "📎 ",
+        h("a", { class: "link", href: url, download: a.file.filename, target: "_blank" },
+          a.file.filename),
+        h("span", { class: "dim" }, `${bytes.length} bytes`)),
+      h("div", { class: "action-meta" }, meta(["file"])));
+  }
+
+  if (a.action === "send") {
+    return h("div", { class: "action-card" },
+      h("div", { class: "action-kind" }, `${nickname} · send`),
+      h("div", { class: "bubble" }, a.content),
+      h("div", { class: "action-meta" }, meta(["content"])));
+  }
+
+  if (a.action === "reply") {
+    return h("div", { class: "action-card" },
+      h("div", { class: "action-kind" }, `${nickname} · reply`),
+      h("div", { class: "reply-marker" }, `↩ reply to message #${a.message_id}`),
+      h("div", { class: "bubble" }, a.content),
+      h("div", { class: "action-meta" }, meta(["content"])));
+  }
+
+  if (a.action === "react") {
+    return h("div", { class: "action-card" },
+      h("div", { class: "action-kind" }, `${nickname} · add_reaction`),
+      h("span", { class: "react-chip" }, a.emoji),
+      h("div", { class: "action-meta" }, meta(["emoji"])));
+  }
+
+  // unknown action kinds still render fully, generically
+  return h("div", { class: "action-card" },
+    h("div", { class: "action-kind" }, `${nickname} · ${a.action || "?"}`),
+    h("pre", { class: "console", style: "margin:0" }, JSON.stringify(a, null, 2)));
+}
+
 async function projectTestTab(root, info) {
   const slug = info.slug;
+  let mode = "ui"; // "ui" (default) | "json"
+
   const eventSel = h("select", null,
     Object.keys(FAUX_EVENTS).map((e) => h("option", { value: e }, e)));
-  const payloadTA = h("textarea", { rows: 12, style: "width:100%" });
-  const savedTA = localStorage.getItem(`test-payload:${slug}:${eventSel.value}`);
-  payloadTA.value = savedTA || JSON.stringify(FAUX_EVENTS[eventSel.value], null, 2);
-  eventSel.onchange = () => {
-    payloadTA.value = localStorage.getItem(`test-payload:${slug}:${eventSel.value}`)
-      || JSON.stringify(FAUX_EVENTS[eventSel.value], null, 2);
-  };
-  const resultDiv = h("div", null);
+  const payloadTA = h("textarea", { rows: 12, style: "width:100%; display:none" });
+  const uiWrap = h("div", null);
+  const jsonBtn = h("button", { class: "small secondary" }, "JSON");
+  const uiBtn = h("button", { class: "small" }, "UI");
+  const resultDiv = h("div", null, h("p", { class: "hint" }, "Run a test to see what your code would do."));
   const runBtn = h("button", null, "Run test (draft + cloned KV)");
+
+  const storageKey = () => `test-payload:${slug}:${eventSel.value}`;
+
+  function tryParse(s) { try { return JSON.parse(s); } catch { return undefined; } }
+
+  function loadPayload() {
+    const saved = localStorage.getItem(storageKey());
+    const obj = tryParse(saved) ?? structuredClone(FAUX_EVENTS[eventSel.value]);
+    payloadTA.value = JSON.stringify(obj, null, 2);
+    if (mode === "ui") { uiWrap.replaceChildren(); Object.entries(obj).forEach(([k, v]) => uiWrap.append(uiField(k, v, k))); }
+  }
+
+  function showMode() {
+    jsonBtn.className = mode === "json" ? "small" : "small secondary";
+    uiBtn.className = mode === "ui" ? "small" : "small secondary";
+    payloadTA.style.display = mode === "json" ? "" : "none";
+    uiWrap.style.display = mode === "ui" ? "" : "none";
+  }
+
+  jsonBtn.onclick = () => {
+    if (mode === "ui") {
+      let obj;
+      try { obj = serializeUI(uiWrap); } catch (e) { toast(e.message, "error"); return; }
+      payloadTA.value = JSON.stringify(obj, null, 2);
+    }
+    mode = "json"; showMode(); persist();
+  };
+  uiBtn.onclick = () => {
+    if (mode === "json") {
+      const obj = tryParse(payloadTA.value);
+      if (obj === undefined) { toast("payload is not valid JSON — fix it before switching to the UI form", "error"); return; }
+      if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+        toast("payload must be a JSON object", "error"); return;
+      }
+      uiWrap.replaceChildren();
+      Object.entries(obj).forEach(([k, v]) => uiWrap.append(uiField(k, v, k)));
+    }
+    mode = "ui"; showMode(); persist();
+  };
+
+  function currentPayload() {
+    if (mode === "ui") return serializeUI(uiWrap);
+    const obj = tryParse(payloadTA.value);
+    if (obj === undefined) throw new Error("payload is not valid JSON");
+    return obj;
+  }
+  function persist() {
+    try { localStorage.setItem(storageKey(), JSON.stringify(currentPayload())); } catch {}
+  }
+
+  eventSel.onchange = () => { loadPayload(); };
+  payloadTA.addEventListener("input", () => persist());
+  uiWrap.addEventListener("input", () => persist());
 
   runBtn.onclick = async () => {
     let data;
-    try { data = JSON.parse(payloadTA.value); }
-    catch (e) { toast("payload is not valid JSON: " + e.message, "error"); return; }
-    localStorage.setItem(`test-payload:${slug}:${eventSel.value}`, payloadTA.value);
+    try { data = currentPayload(); } catch (e) { toast(e.message, "error"); return; }
+    persist();
     runBtn.disabled = true;
-    resultDiv.replaceChildren(h("p", { class: "hint" }, `running ${eventSel.value} against draft.py with a fresh copy of the real KV store…`));
+    resultDiv.replaceChildren(h("p", { class: "hint" },
+      `running ${eventSel.value} against draft.py with a fresh copy of the real KV store…`));
     try {
       const r = await api("POST", `api/projects/${slug}/test`, { event: eventSel.value, data });
       const parts = [];
@@ -466,10 +640,12 @@ async function projectTestTab(root, info) {
           parts.push(h("h3", null, "Error"),
             h("pre", { class: "console result-err" }, r.error.traceback || r.error.message));
         }
-        parts.push(h("h3", null, `Actions (${(r.actions || []).length})`),
-          (r.actions || []).length
-            ? h("pre", { class: "console" }, (r.actions || []).map((a) => JSON.stringify(a)).join("\n"))
-            : h("p", { class: "hint" }, "no actions (nothing would be sent)"));
+        parts.push(h("h3", null, `What would happen on Discord (${(r.actions || []).length})`));
+        if ((r.actions || []).length) {
+          r.actions.forEach((a) => parts.push(actionCard(a, info.nickname)));
+        } else {
+          parts.push(h("p", { class: "hint" }, "no actions (nothing would be sent)"));
+        }
         parts.push(h("h3", null, `Logs (${(r.logs || []).length})`),
           (r.logs || []).length
             ? h("pre", { class: "console" }, (r.logs || []).join("\n"))
@@ -483,19 +659,21 @@ async function projectTestTab(root, info) {
     }
   };
 
+  loadPayload();
+  showMode();
   root.replaceChildren(
-    h("div", { class: "split" },
-      h("div", { class: "card" },
-        h("h2", null, "Fake event"),
+    h("div", { class: "card" },
+      h("h2", null, "Fake event"),
+      h("div", { class: "form-row" },
         h("label", { class: "field" }, "Event type", eventSel),
-        h("div", { style: "height:8px" }),
-        h("label", { class: "field" }, "Payload (JSON)", payloadTA),
-        h("div", { style: "height:10px" }),
-        runBtn,
-        h("p", { class: "hint" },
-          "The test KV is reset to a copy of the real KV at the start of every run. Nothing is sent to Discord.")),
-      h("div", { class: "card" }, h("h2", null, "Result"), resultDiv),
-    ),
+        h("label", { class: "field" }, "Payload editor", h("div", { class: "row-actions" }, jsonBtn, uiBtn))),
+      h("div", { style: "height:8px" }),
+      payloadTA, uiWrap,
+      h("div", { style: "height:10px" }),
+      runBtn, " ",
+      h("span", { class: "hint" },
+        "Both editors edit the same object — switch freely. Test runs use a fresh copy of the real KV; nothing is sent to Discord.")),
+    h("div", { class: "card" }, h("h2", null, "Result"), resultDiv),
   );
 }
 
@@ -553,7 +731,7 @@ async function projectKvTab(root, info) {
     const newKey = h("input", { placeholder: "new key" });
     const newVal = h("input", { placeholder: 'value (JSON, e.g. 42, "text", [1,2])' });
     tableWrap.replaceChildren(
-      h("table", { class: "kv-table" },
+      h("div", { class: "tablewrap" }, h("table", { class: "kv-table" },
         h("tr", null, h("th", null, "Key"), h("th", null, "Value (JSON)"), h("th", null, "")),
         h("tr", null,
           h("td", null, newKey),
@@ -584,7 +762,7 @@ async function projectKvTab(root, info) {
                 renderTable();
               },
             }, "del")));
-        })),
+        }))),
       keys.length === 0 ? h("p", { class: "hint" }, "store is empty") : null,
     );
   }

@@ -89,3 +89,15 @@ My friends are already using the platform, nice work. Other things to implement:
 - expand meido example to showcase embedded and file attach functionalities, you can be creative
 
 make sure transitive dependencies of system dependencies can't be uninstalled also
+
+Continue qol changes:
+- on mobile devices the content bleeds out to the right, fix with dev-browser
+- on test tab:
+  - make the layout one column only, top row is fake event settings, bottom row is result. for configuring fake event, enable both json view (the current view) and ui view. two views should be editing exact same object, i.e., user should be able to change between two views during edit without losing any filled data. if json view does not contain valid json, prevent switching to ui view
+  - illustrate actions by ui, no raw text. for text, illustrate as message bubbles. for embed, illustrate in discord embed style. for file attachments, provide openable link (no file serving on backend, frontend provide the binary data and present as file)
+
+
+btw user should still be able to see every piece of info about generated actions during test, no info hidden under ui
+
+
+very good. additionally, make ui form (rename the button to simply "ui" when you are done) the default editor, and make the content field a textbox with multiline support, as people can send multiline messages
