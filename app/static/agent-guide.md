@@ -74,7 +74,7 @@ no loops. Custom emojis arrive as `"<:name:id>"`.
 | call | effect |
 |---|---|
 | `send(text, channel_id=None)` | queue a message (default: the channel the event happened in). Plain text sends are aggregated across projects. |
-| `reply(text)` | reply to the triggering message (message events only) |
+| `reply(text)` | identical to `send()` — merged into the aggregated `[nickname]` message — but that message quotes the triggering one (message events only) |
 | `add_reaction(emoji, message_id=None)` | react (default: the event's message) |
 | `send_embed(title=None, description=None, color=0x5865F2, fields=None, channel_id=None)` | rich embed; `fields=[{"name":…,"value":…,"inline":True}]` (max 25) |
 | `send_file(filename, content, channel_id=None)` | attach a file; `content` is `str` or `bytes` |

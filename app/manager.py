@@ -378,6 +378,7 @@ class Manager:
         done: set[str] = set()
         all_done = asyncio.Event()
         channel_id = data.get("channel_id")
+        reply_ref: int | None = None           # triggering message to quote
         nick_of = {p.slug: p.meta.get("nickname", p.slug) for p in deployed}
         proj_of = {p.slug: p for p in deployed}
 
@@ -386,10 +387,13 @@ class Manager:
                 _console(p, f"handler '{event}' failed: {res['error']['message']}", "ERROR")
             results[p.slug] = res
             sections.setdefault(p.slug, [])
+            nonlocal reply_ref
             for a in res.get("actions", []):
                 if a.get("action") == "send" and "content" in a \
                         and "embed" not in a and "file" not in a:
                     sections[p.slug].append(a["content"])
+                    if a.get("reply_to_message_id"):
+                        reply_ref = int(a["reply_to_message_id"])
                 else:
                     immediate.append((p, a))
             done.add(p.slug)
@@ -416,11 +420,12 @@ class Manager:
                 return False
             for chunk in _chunk_blocks(blocks):
                 trace["messages_sent"].append(
-                    {"channel_id": channel_id, "content": chunk, "why": kind})
+                    {"channel_id": channel_id, "content": chunk, "why": kind,
+                     "reply_to": reply_ref})
                 if channel_id is None:
                     continue
                 try:
-                    await executor.send_text(channel_id, chunk)
+                    await executor.send_text(channel_id, chunk, reply_ref)
                 except Exception as e:
                     for p in deployed:
                         _console(p, f"failed to send aggregated message: {e}", "ERROR")
@@ -468,17 +473,21 @@ class Manager:
         if self.executor is None:
             return
         texts, rest = [], []
+        reply_ref = None
         for a in actions:
-            if a.get("action") == "send" and "content" in a:
+            if a.get("action") == "send" and "content" in a \
+                    and "embed" not in a and "file" not in a:
                 texts.append(a["content"])
+                if a.get("reply_to_message_id"):
+                    reply_ref = int(a["reply_to_message_id"])
             else:
                 rest.append(a)
         if texts:
             nick = project.meta.get("nickname", project.slug)
+            ch = next((a.get("channel_id") for a in actions if a.get("channel_id")), None)
             for chunk in _chunk_blocks([f"[{nick}]:\n" + "\n".join(texts)]):
-                ch = next((a.get("channel_id") for a in actions if a.get("channel_id")), None)
                 if ch is not None:
-                    await self.executor.send_text(ch, chunk)
+                    await self.executor.send_text(ch, chunk, reply_ref)
         for a in rest:
             try:
                 await self.executor.execute(a)

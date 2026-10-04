@@ -360,8 +360,9 @@ class RecordingExecutor:
         self.messages: list[dict] = []
         self.actions: list[dict] = []
 
-    async def send_text(self, channel_id, content):
-        self.messages.append({"channel_id": channel_id, "content": content})
+    async def send_text(self, channel_id, content, reference_message_id=None):
+        self.messages.append({"channel_id": channel_id, "content": content,
+                              "reference_message_id": reference_message_id})
 
     async def execute(self, action):
         self.actions.append(action)

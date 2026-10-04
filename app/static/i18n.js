@@ -75,7 +75,7 @@ window.CHEATSHEET = {
       title: "Actions",
       rows: [
         ["send(text, channel_id=None)", "post a message (default: the event's channel). Plain text is merged with other projects' replies."],
-        ["reply(text)", "reply to the triggering message (message events only)"],
+        ["reply(text)", "identical to send(), but the aggregated message quotes the triggering message (message events only)"],
         ["add_reaction(emoji, message_id=None)", "react to the message (or one you pick)"],
         ["send_embed(title=…, description=…, color=…, fields=…, channel_id=None)", "rich embed; fields=[{\"name\":…,\"value\":…,\"inline\":True}]"],
         ["send_file(filename, content, channel_id=None)", "attach a file; content is str or bytes"],
@@ -125,7 +125,7 @@ window.CHEATSHEET = {
       title: "动作",
       rows: [
         ["send(text, channel_id=None)", "发消息（默认发到事件所在频道）；纯文本会与其他项目的回复合并"],
-        ["reply(text)", "回复触发事件的那条消息（仅消息类事件）"],
+        ["reply(text)", "与 send() 相同，但聚合消息会引用（quote）触发事件的那条消息（仅消息类事件）"],
         ["add_reaction(emoji, message_id=None)", "给消息添加表情回应（可指定其他消息）"],
         ["send_embed(title=…, description=…, color=…, fields=…, channel_id=None)", "发送 embed 卡片；fields=[{\"name\":…,\"value\":…,\"inline\":True}]"],
         ["send_file(filename, content, channel_id=None)", "发送附件；content 为 str 或 bytes"],

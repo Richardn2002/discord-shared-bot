@@ -107,20 +107,28 @@ def _record(action: dict):
 
 
 def send(text, channel_id=None):
+    _record_send(str(text), channel_id, None)
+
+
+def reply(text):
+    """Same as send(), but the (aggregated) message quotes the triggering
+    message via Discord's reply reference."""
+    mid = _ctx["data"].get("id") if _ctx is not None else None
+    if mid is None:
+        log("[framework] reply() dropped: the current event has no message to reply to")
+        return
+    _record_send(str(text), None, mid)
+
+
+def _record_send(text, channel_id, reply_to_message_id):
     ch = channel_id if channel_id is not None else _event_channel()
     if ch is None:
         log("[framework] send() dropped: no channel context")
         return
-    _record({"action": "send", "channel_id": ch, "content": str(text)})
-
-
-def reply(text):
-    ch = _event_channel()
-    mid = _ctx["data"].get("id") if _ctx is not None else None
-    if ch is None or mid is None:
-        log("[framework] reply() dropped: the current event has no message to reply to")
-        return
-    _record({"action": "reply", "channel_id": ch, "message_id": mid, "content": str(text)})
+    a = {"action": "send", "channel_id": ch, "content": text}
+    if reply_to_message_id is not None:
+        a["reply_to_message_id"] = reply_to_message_id
+    _record(a)
 
 
 def add_reaction(emoji, message_id=None):

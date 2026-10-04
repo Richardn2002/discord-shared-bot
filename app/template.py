@@ -11,8 +11,9 @@ HANDLER_TEMPLATE = '''\
 # Available framework functions (they are injected, no imports needed):
 #   send(text, channel_id=None)            queue a message (defaults to the
 #                                          channel the event happened in)
-#   reply(text)                            reply to the triggering message
-#                                          (on_message / on_message_edit only)
+#   reply(text)                            identical to send(), but the
+#                                          aggregated message quotes the
+#                                          triggering message (message events only)
 #   add_reaction(emoji, message_id=None)   react to the triggering message
 #                                          (or a message id you pass)
 #   send_embed(title=None, description=None, color=0x5865F2, fields=None,

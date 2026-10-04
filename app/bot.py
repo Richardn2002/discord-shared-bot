@@ -134,9 +134,16 @@ class DiscordExecutor:
             ch = await self.client.fetch_channel(channel_id)
         return ch
 
-    async def send_text(self, channel_id: int, content: str) -> None:
+    async def send_text(self, channel_id: int, content: str,
+                        reference_message_id: int | None = None) -> None:
         ch = await self._channel(channel_id)
-        await ch.send(content)
+        kwargs: dict = {}
+        if reference_message_id:
+            kwargs["reference"] = discord.MessageReference(
+                message_id=reference_message_id, channel_id=channel_id,
+                fail_if_not_exists=False)
+            kwargs["allowed_mentions"] = discord.AllowedMentions(replied_user=False)
+        await ch.send(content, **kwargs)
 
     async def fetch_message(self, channel_id: int, message_id: int):
         """Used by the get_message framework primitive. Returns a payload dict,
@@ -167,12 +174,6 @@ class DiscordExecutor:
             f = action["file"]
             data = base64.b64decode(f["data_b64"])
             await ch.send(file=discord.File(io.BytesIO(data), filename=f["filename"]))
-        elif kind == "reply":
-            ref = discord.MessageReference(message_id=action["message_id"],
-                                           channel_id=action["channel_id"],
-                                           fail_if_not_exists=False)
-            await ch.send(action["content"], reference=ref,
-                          allowed_mentions=discord.AllowedMentions(replied_user=False))
         elif kind == "react":
             msg = ch.get_partial_message(action["message_id"])
             await msg.add_reaction(action["emoji"])

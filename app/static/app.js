@@ -536,18 +536,12 @@ function actionCard(a, nickname) {
   }
 
   if (a.action === "send") {
+    const isReply = a.reply_to_message_id != null;
     return h("div", { class: "action-card" },
-      h("div", { class: "action-kind" }, `${nickname} · send`),
+      h("div", { class: "action-kind" }, `${nickname} · ${isReply ? "reply" : "send"}`),
+      isReply ? h("div", { class: "reply-marker" }, `↩ quotes message #${a.reply_to_message_id}`) : null,
       h("div", { class: "bubble" }, a.content),
-      h("div", { class: "action-meta" }, meta(["content"])));
-  }
-
-  if (a.action === "reply") {
-    return h("div", { class: "action-card" },
-      h("div", { class: "action-kind" }, `${nickname} · reply`),
-      h("div", { class: "reply-marker" }, `↩ reply to message #${a.message_id}`),
-      h("div", { class: "bubble" }, a.content),
-      h("div", { class: "action-meta" }, meta(["content"])));
+      h("div", { class: "action-meta" }, meta(["content", "reply_to_message_id"])));
   }
 
   if (a.action === "react") {
