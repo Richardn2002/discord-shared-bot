@@ -148,6 +148,8 @@ class Worker:
                         fut.set_result(msg)
                 elif t == "log":
                     _console(self.project, msg.get("line", ""))
+                elif t == "query":
+                    asyncio.create_task(self._answer_query(msg))
         except Exception:
             pass
         finally:
@@ -170,6 +172,33 @@ class Worker:
                     self.state = "exited"  # type: ignore
                     _console(self.project, f"worker exited unexpectedly (code {code})", "ERROR")
 
+    async def _answer_query(self, msg: dict) -> None:
+        """Worker asked us something mid-handler (e.g. get_message). Answer over
+        its stdin so the handler can continue."""
+        answer = {"type": "query_result", "qid": msg.get("qid")}
+        try:
+            if msg.get("query") != "get_message":
+                answer["error"] = f"unknown query '{msg.get('query')}'"
+            else:
+                args = msg.get("args") or {}
+                ex = Manager.INSTANCE.executor if Manager.INSTANCE else None
+                if ex is None or not hasattr(ex, "fetch_message"):
+                    answer["error"] = "bot is offline (no Discord token)"
+                elif args.get("channel_id") is None:
+                    answer["error"] = "no channel_id"
+                else:
+                    answer["value"] = await ex.fetch_message(
+                        channel_id=int(args["channel_id"]),
+                        message_id=int(args["message_id"]))
+        except Exception as e:
+            answer["error"] = str(e)
+        try:
+            if self.proc and self.proc.stdin and self.proc.returncode is None:
+                self.proc.stdin.write((json.dumps(answer) + "\n").encode("utf-8"))
+                await self.proc.stdin.drain()
+        except Exception:
+            pass
+
     async def _stderr_reader(self) -> None:
         try:
             assert self.proc and self.proc.stderr
@@ -182,7 +211,8 @@ class Worker:
 
     # -- running handlers ----------------------------------------------------
     async def run(self, event: str, data: dict, timeout: float,
-                  allow_failure_handler: bool = True) -> dict:
+                  allow_failure_handler: bool = True,
+                  test_mode: bool = False, fake_message: dict | None = None) -> dict:
         """Run one event through the worker. Never raises; returns a result dict."""
         async with self.lock:
             try:
@@ -199,6 +229,9 @@ class Worker:
             self.pending[rid] = fut
             req = {"type": "run", "id": rid, "event": event, "data": data,
                    "timeout": timeout}
+            if test_mode:
+                req["test"] = True
+                req["fake_message"] = fake_message
             try:
                 self.proc.stdin.write((json.dumps(req) + "\n").encode("utf-8"))
                 await self.proc.stdin.drain()
@@ -453,7 +486,8 @@ class Manager:
                 _console(project, f"failure-handler action failed: {e}", "ERROR")
 
     # -- test runner ----------------------------------------------------------
-    async def run_test(self, project: projects.Project, event: str, data: dict) -> dict:
+    async def run_test(self, project: projects.Project, event: str, data: dict,
+                       fake_message: dict | None = None) -> dict:
         """Run draft.py once against a freshly cloned test KV store."""
         from .kvstore import KVStore
         lock = self.test_locks.setdefault(project.slug, asyncio.Lock())
@@ -462,7 +496,8 @@ class Manager:
             w = Worker(project, code_file="draft.py", kv_file="kv_test.json")
             try:
                 res = await w.run(event, data, project.timeout,
-                                  allow_failure_handler=False)
+                                  allow_failure_handler=False,
+                                  test_mode=True, fake_message=fake_message)
             finally:
                 await w._kill()
             return res

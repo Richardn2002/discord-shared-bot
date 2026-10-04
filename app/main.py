@@ -225,7 +225,10 @@ async def test_project(slug: str, payload: dict = Body(...)):
         return {"ok": False, "phase": "compile", "error": check["error"]}
     event = payload.get("event", "on_message")
     data = payload.get("data") or {}
-    res = await manager.run_test(p, event, data)
+    fake = payload.get("fake_message")
+    if fake is not None and not isinstance(fake, dict):
+        raise HTTPException(400, "fake_message must be an object or null")
+    res = await manager.run_test(p, event, data, fake_message=fake)
     return {"ok": res.get("error") is None, "phase": "run", **res}
 
 
@@ -289,6 +292,38 @@ async def kv_delete_key(slug: str, key: str,
                         which: str = Query("real", pattern="^(real|test)$")):
     store = _kv_for(slug, which)
     return {"ok": store.delete(key)}
+
+
+# -- secrets (.env store) -----------------------------------------------------
+
+@app.get("/api/projects/{slug}/secrets")
+async def secrets_list(slug: str):
+    return projects.secrets_read(_project_or_404(slug))
+
+
+@app.put("/api/projects/{slug}/secrets")
+async def secrets_replace(slug: str, payload: dict = Body(...)):
+    p = _project_or_404(slug)
+    try:
+        projects.secrets_write(p, payload)
+    except projects.ProjectError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "keys": len(payload)}
+
+
+@app.put("/api/projects/{slug}/secrets/{key}")
+async def secrets_set(slug: str, key: str, payload: dict = Body(...)):
+    p = _project_or_404(slug)
+    try:
+        projects.secrets_set(p, key, payload.get("value"))
+    except projects.ProjectError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{slug}/secrets/{key}")
+async def secrets_delete(slug: str, key: str):
+    return {"ok": projects.secrets_delete(_project_or_404(slug), key)}
 
 
 # ---------------------------------------------------------------------------

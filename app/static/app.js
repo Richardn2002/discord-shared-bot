@@ -268,18 +268,27 @@ const FAUX_EVENTS = {
     author: { id: 42, name: "tester", display_name: "Tester" },
     channel_id: 555, channel_name: "general",
     guild_id: 999, guild_name: "Test Guild", attachments: [],
+    reply_to: null, mentions: [], mention_everyone: false, pinned: false,
+    created_at: "2026-01-01T12:00:00+00:00", edited_at: null,
+    jump_url: "https://discord.com/channels/999/555/1001", old_content: null,
   },
   on_message_edit: {
     id: 1001, content: "hello bot (edited)", old_content: "hello bot",
     author: { id: 42, name: "tester", display_name: "Tester" },
     channel_id: 555, channel_name: "general",
     guild_id: 999, guild_name: "Test Guild", attachments: [],
+    reply_to: null, mentions: [], mention_everyone: false, pinned: false,
+    created_at: "2026-01-01T12:00:00+00:00", edited_at: "2026-01-01T12:05:00+00:00",
+    jump_url: "https://discord.com/channels/999/555/1001",
   },
   on_message_delete: {
     id: 1001, content: "hello bot", old_content: null,
     author: { id: 42, name: "tester", display_name: "Tester" },
     channel_id: 555, channel_name: "general",
     guild_id: 999, guild_name: "Test Guild", attachments: [],
+    reply_to: null, mentions: [], mention_everyone: false, pinned: false,
+    created_at: "2026-01-01T12:00:00+00:00", edited_at: null,
+    jump_url: "https://discord.com/channels/999/555/1001",
   },
   on_reaction_add: {
     emoji: "👍", message_id: 1001, channel_id: 555, channel_name: "general",
@@ -554,81 +563,125 @@ function actionCard(a, nickname) {
     h("pre", { class: "console", style: "margin:0" }, JSON.stringify(a, null, 2)));
 }
 
-async function projectTestTab(root, info) {
-  const slug = info.slug;
+// one object edited two ways (UI form ⇄ JSON), switchable without data loss
+function tryParse(s) { try { return JSON.parse(s); } catch { return undefined; } }
+
+function makeDualEditor(onChange) {
   let mode = "ui"; // "ui" (default) | "json"
-
-  const eventSel = h("select", null,
-    Object.keys(FAUX_EVENTS).map((e) => h("option", { value: e }, e)));
-  const payloadTA = h("textarea", { rows: 12, style: "width:100%; display:none" });
+  const ta = h("textarea", { rows: 10, style: "width:100%; display:none" });
   const uiWrap = h("div", null);
-  const jsonBtn = h("button", { class: "small secondary" }, "JSON");
-  const uiBtn = h("button", { class: "small" }, "UI");
-  const resultDiv = h("div", null, h("p", { class: "hint" }, "Run a test to see what your code would do."));
-  const runBtn = h("button", null, "Run test (draft + cloned KV)");
+  const uiBtn = h("button", { class: "small", type: "button" }, "UI");
+  const jsonBtn = h("button", { class: "small secondary", type: "button" }, "JSON");
 
-  const storageKey = () => `test-payload:${slug}:${eventSel.value}`;
-
-  function tryParse(s) { try { return JSON.parse(s); } catch { return undefined; } }
-
-  function loadPayload() {
-    const saved = localStorage.getItem(storageKey());
-    const obj = tryParse(saved) ?? structuredClone(FAUX_EVENTS[eventSel.value]);
-    payloadTA.value = JSON.stringify(obj, null, 2);
-    if (mode === "ui") { uiWrap.replaceChildren(); Object.entries(obj).forEach(([k, v]) => uiWrap.append(uiField(k, v, k))); }
+  function buildUI(obj) {
+    uiWrap.replaceChildren(...Object.entries(obj).map(([k, v]) => uiField(k, v, k)));
   }
-
-  function showMode() {
-    jsonBtn.className = mode === "json" ? "small" : "small secondary";
+  function show() {
     uiBtn.className = mode === "ui" ? "small" : "small secondary";
-    payloadTA.style.display = mode === "json" ? "" : "none";
+    jsonBtn.className = mode === "json" ? "small" : "small secondary";
+    ta.style.display = mode === "json" ? "" : "none";
     uiWrap.style.display = mode === "ui" ? "" : "none";
   }
+  function setObj(obj) {
+    ta.value = JSON.stringify(obj, null, 2);
+    if (mode === "ui") buildUI(obj);
+  }
+  function getObj() {
+    if (mode === "ui") return serializeUI(uiWrap);
+    const v = tryParse(ta.value);
+    if (v === undefined) throw new Error("not valid JSON");
+    return v;
+  }
 
+  uiBtn.onclick = () => {
+    if (mode === "json") {
+      const obj = tryParse(ta.value);
+      if (obj === undefined) { toast("not valid JSON — fix it before switching to UI", "error"); return; }
+      if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+        toast("must be a JSON object", "error"); return;
+      }
+      buildUI(obj);
+    }
+    mode = "ui"; show(); onChange();
+  };
   jsonBtn.onclick = () => {
     if (mode === "ui") {
       let obj;
       try { obj = serializeUI(uiWrap); } catch (e) { toast(e.message, "error"); return; }
-      payloadTA.value = JSON.stringify(obj, null, 2);
+      ta.value = JSON.stringify(obj, null, 2);
     }
-    mode = "json"; showMode(); persist();
+    mode = "json"; show(); onChange();
   };
-  uiBtn.onclick = () => {
-    if (mode === "json") {
-      const obj = tryParse(payloadTA.value);
-      if (obj === undefined) { toast("payload is not valid JSON — fix it before switching to the UI form", "error"); return; }
-      if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
-        toast("payload must be a JSON object", "error"); return;
-      }
-      uiWrap.replaceChildren();
-      Object.entries(obj).forEach(([k, v]) => uiWrap.append(uiField(k, v, k)));
-    }
-    mode = "ui"; showMode(); persist();
-  };
+  ta.addEventListener("input", onChange);
+  uiWrap.addEventListener("input", onChange);
 
-  function currentPayload() {
-    if (mode === "ui") return serializeUI(uiWrap);
-    const obj = tryParse(payloadTA.value);
-    if (obj === undefined) throw new Error("payload is not valid JSON");
-    return obj;
+  const toggleRow = h("div", { class: "row-actions" }, uiBtn, jsonBtn);
+  const body = h("div", null, ta, uiWrap);
+  const el = h("div", null, toggleRow, h("div", { style: "height:6px" }), body);
+  return { el, toggleRow, body, getObj, setObj };
+}
+
+async function projectTestTab(root, info) {
+  const slug = info.slug;
+
+  const eventSel = h("select", null,
+    Object.keys(FAUX_EVENTS).map((e) => h("option", { value: e }, e)));
+  const resultDiv = h("div", null, h("p", { class: "hint" }, "Run a test to see what your code would do."));
+  const runBtn = h("button", null, "Run test (draft + cloned KV)");
+
+  const payloadEditor = makeDualEditor(() => persistPayload());
+  const fakeEditor = makeDualEditor(() => persistFake());
+  const fakeEnable = h("input", { type: "checkbox" });
+
+  const storageKey = () => `test-payload:${slug}:${eventSel.value}`;
+  const fakeKey = `test-fake-msg:${slug}`;
+  const fakeOnKey = `test-fake-on:${slug}`;
+
+  function loadPayload() {
+    payloadEditor.setObj(tryParse(localStorage.getItem(storageKey()))
+      ?? structuredClone(FAUX_EVENTS[eventSel.value]));
   }
-  function persist() {
-    try { localStorage.setItem(storageKey(), JSON.stringify(currentPayload())); } catch {}
+  function persistPayload() {
+    try { localStorage.setItem(storageKey(), JSON.stringify(payloadEditor.getObj())); } catch {}
   }
+
+  function loadFake() {
+    fakeEnable.checked = localStorage.getItem(fakeOnKey) === "1";
+    const tpl = structuredClone(FAUX_EVENTS.on_message);
+    delete tpl.old_content;
+    tpl.id = 2002;
+    tpl.content = "the message being replied to";
+    fakeEditor.setObj(tryParse(localStorage.getItem(fakeKey)) ?? tpl);
+    updateFakeVisibility();
+  }
+  function persistFake() {
+    try { localStorage.setItem(fakeKey, JSON.stringify(fakeEditor.getObj())); } catch {}
+  }
+  function updateFakeVisibility() {
+    fakeEditor.el.style.display = fakeEnable.checked ? "" : "none";
+  }
+  fakeEnable.onchange = () => {
+    localStorage.setItem(fakeOnKey, fakeEnable.checked ? "1" : "0");
+    updateFakeVisibility();
+  };
 
   eventSel.onchange = () => { loadPayload(); };
-  payloadTA.addEventListener("input", () => persist());
-  uiWrap.addEventListener("input", () => persist());
 
   runBtn.onclick = async () => {
-    let data;
-    try { data = currentPayload(); } catch (e) { toast(e.message, "error"); return; }
-    persist();
+    let data, fake = null;
+    try {
+      data = payloadEditor.getObj();
+      if (fakeEnable.checked) fake = fakeEditor.getObj();
+    } catch (e) { toast(e.message, "error"); return; }
+    persistPayload();
+    persistFake();
     runBtn.disabled = true;
     resultDiv.replaceChildren(h("p", { class: "hint" },
       `running ${eventSel.value} against draft.py with a fresh copy of the real KV store…`));
+    resultDiv.replaceChildren(h("p", { class: "hint" },
+      `running ${eventSel.value} against draft.py with a fresh copy of the real KV store…`));
     try {
-      const r = await api("POST", `api/projects/${slug}/test`, { event: eventSel.value, data });
+      const r = await api("POST", `api/projects/${slug}/test`, { event: eventSel.value, data, fake_message: fake });
       const parts = [];
       if (r.phase === "compile") {
         parts.push(h("pre", { class: "console result-err" }, "COMPILE FAILED:\n" + r.error));
@@ -646,6 +699,20 @@ async function projectTestTab(root, info) {
         } else {
           parts.push(h("p", { class: "hint" }, "no actions (nothing would be sent)"));
         }
+        if ((r.queries || []).length) {
+          parts.push(h("h3", null, `Lookups (${r.queries.length})`));
+          r.queries.forEach((q) => {
+            parts.push(h("div", { class: "action-card" },
+              h("div", { class: "action-kind" }, `${q.query}()`),
+              h("div", { class: "action-meta" }, `args: ${JSON.stringify(q.args)}`),
+              h("div", { class: "action-meta" }, q.error
+                ? `→ None (${q.error})`
+                : q.result
+                  ? `→ message ${q.result.id}: ${JSON.stringify(q.result.content)}` +
+                    (q.result.author ? ` · by ${q.result.author.name}` : "")
+                  : "→ None (not found)")));
+          });
+        }
         parts.push(h("h3", null, `Logs (${(r.logs || []).length})`),
           (r.logs || []).length
             ? h("pre", { class: "console" }, (r.logs || []).join("\n"))
@@ -660,19 +727,25 @@ async function projectTestTab(root, info) {
   };
 
   loadPayload();
-  showMode();
+  loadFake();
   root.replaceChildren(
     h("div", { class: "card" },
       h("h2", null, "Fake event"),
       h("div", { class: "form-row" },
         h("label", { class: "field" }, "Event type", eventSel),
-        h("label", { class: "field" }, "Payload editor", h("div", { class: "row-actions" }, jsonBtn, uiBtn))),
-      h("div", { style: "height:8px" }),
-      payloadTA, uiWrap,
+        h("label", { class: "field" }, "Payload editor", payloadEditor.toggleRow)),
+      payloadEditor.body,
       h("div", { style: "height:10px" }),
       runBtn, " ",
       h("span", { class: "hint" },
-        "Both editors edit the same object — switch freely. Test runs use a fresh copy of the real KV; nothing is sent to Discord.")),
+        "UI and JSON edit the same object — switch freely. Test runs use a fresh copy of the real KV; nothing is sent to Discord.")),
+    h("div", { class: "card" },
+      h("h2", null, "Fake lookup (optional)"),
+      h("label", { class: "row-actions", style: "gap:8px; margin-bottom:8px" }, fakeEnable,
+        h("span", null, "answer get_message() with this message")),
+      h("p", { class: "hint" },
+        "During tests get_message() never touches Discord: asking for this message's id returns it; any other id returns None. Lookups appear under Result → Lookups."),
+      fakeEditor.el),
     h("div", { class: "card" }, h("h2", null, "Result"), resultDiv),
   );
 }
@@ -763,7 +836,55 @@ async function projectKvTab(root, info) {
               },
             }, "del")));
         }))),
-      keys.length === 0 ? h("p", { class: "hint" }, "store is empty") : null,
+      ...(keys.length === 0 ? [h("p", { class: "hint" }, "store is empty")] : []),
+    );
+  }
+
+  // --- secrets section (single .env store, read-only for handlers via secret_get)
+  const secWrap = h("div", null);
+  async function renderSecrets() {
+    const data = await api("GET", `api/projects/${slug}/secrets`);
+    const keys = Object.keys(data);
+    const newKey = h("input", { placeholder: "KEY_NAME" });
+    const newVal = h("input", { placeholder: "secret value (plain text)" });
+    async function setSecret(k, v) {
+      await api("PUT", `api/projects/${slug}/secrets/${encodeURIComponent(k)}`, { value: v });
+      toast(`saved secret ${k}`);
+    }
+    secWrap.replaceChildren(
+      h("div", { class: "tablewrap" }, h("table", { class: "kv-table" },
+        h("tr", null, h("th", null, "Key"), h("th", null, "Value"), h("th", null, "")),
+        h("tr", null,
+          h("td", null, newKey),
+          h("td", null, newVal),
+          h("td", null, h("button", {
+            class: "small",
+            onclick: async () => {
+              if (!newKey.value.trim()) return;
+              await setSecret(newKey.value.trim(), newVal.value);
+              renderSecrets();
+            },
+          }, "add"))),
+        keys.map((k) => {
+          const valIn = h("input", { value: data[k] });
+          let dirty = false;
+          valIn.addEventListener("input", () => { dirty = true; });
+          const saveIfDirty = () => { if (dirty) setSecret(k, valIn.value); };
+          valIn.addEventListener("blur", saveIfDirty);
+          valIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { saveIfDirty(); valIn.blur(); } });
+          return h("tr", null,
+            h("td", { class: "mono" }, k),
+            h("td", null, valIn),
+            h("td", null, h("button", {
+              class: "danger small",
+              onclick: async () => {
+                if (!confirm(`delete secret "${k}"?`)) return;
+                await api("DELETE", `api/projects/${slug}/secrets/${encodeURIComponent(k)}`);
+                renderSecrets();
+              },
+            }, "del")));
+        }))),
+      ...(keys.length === 0 ? [h("p", { class: "hint" }, "no secrets stored")] : []),
     );
   }
 
@@ -778,8 +899,16 @@ async function projectKvTab(root, info) {
         h("button", { class: "secondary small", onclick: () => fileInput.click() }, "⬆ import JSON (replaces store)"),
         fileInput),
       tableWrap),
+    h("div", { class: "card" },
+      h("h2", null, "Secrets"),
+      h("p", { class: "hint" },
+        "Backed by a gitignored .env file in this project's folder. Read in code with ",
+        h("code", null, 'secret_get("KEY")'),
+        " — handlers can only read. Edits apply immediately, no restart needed."),
+      secWrap),
   );
   await renderTable();
+  await renderSecrets();
 }
 
 // --- console tab ---------------------------------------------------------------

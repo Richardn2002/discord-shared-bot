@@ -74,7 +74,10 @@ simulate events) — events just don't come from Discord and actions are dropped
   messages are never dispatched (no feedback loops).
 * **Framework functions**: `send`, `reply`, `add_reaction`, `send_embed`,
   `send_file`, `log`/`print`, `kv_get`, `kv_set`, `kv_delete`, `kv_keys`,
-  `kv_all`. See the header comment of any new project file.
+  `kv_all`, plus `get_message(message_id, channel_id=None)` (fetch any message
+  the bot can see; `None` on failure) and `secret_get(key, default=None)`
+  (read the project's gitignored `.env` secret store — for API keys).
+  See the header comment of any new project file.
 * **Aggregation**: when an event fires, all deployed projects run it; their
   plain `send()` outputs are merged into one message (in project-creation
   order) as `[nickname]:` sections. Replies/reactions/embeds/files go out
@@ -89,6 +92,9 @@ simulate events) — events just don't come from Discord and actions are dropped
 * **on_failure(event_name, event_data, error)**: called when a handler raises
   or times out. If it also fails, the failure is logged to the console and
   that's it.
+* **Secrets**: each project may keep a `.env` file of API keys, edited under
+  the KV tab and read in code via `secret_get(key)`. It's listed in
+  `files/.gitignore` so shared git history stays secret-free.
 * **Packages**: the Packages page wraps `pip install/uninstall` into the shared
   venv. New workers (deploy/restart) pick them up.
 

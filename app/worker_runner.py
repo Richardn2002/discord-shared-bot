@@ -41,9 +41,13 @@ _PROTO = sys.stdout
 _WRITE_LOCK = threading.Lock()
 
 # Per-run context (one run at a time in this process).
-_ctx = None          # dict with event/data/actions/logs
+_ctx = None          # dict with event/data/actions/logs/queries
 _kv = None           # KVStore
 _slug = "?"
+_project_dir = "."
+
+import itertools
+_qids = itertools.count(1)
 
 
 def _send(obj: dict) -> None:
@@ -179,6 +183,64 @@ def kv_all():
     return _kv.items()
 
 
+def secret_get(key, default=None):
+    """Read the project's secret store (.env file). Strings only.
+    Re-read from disk on every call, so UI edits apply immediately."""
+    from app.envfile import parse_env  # sys.path set up by main()
+    try:
+        text = (Path(_project_dir) / ".env").read_text()
+    except FileNotFoundError:
+        return default
+    return parse_env(text).get(str(key), default)
+
+
+def get_message(message_id, channel_id=None):
+    """Fetch any message the bot can see. Returns a message dict, or None on
+    any failure (not found / no access / bot offline) with a console note.
+    channel_id defaults to the current event's channel."""
+    ch = channel_id if channel_id is not None else _event_channel()
+    if ch is None:
+        log("[framework] get_message() dropped: no channel context")
+        return None
+    args = {"message_id": int(message_id), "channel_id": int(ch)}
+    # Test mode: never touch Discord. Serve the configured fake message when
+    # its id matches, otherwise None.
+    if _ctx is not None and _ctx.get("test_mode"):
+        fm = _ctx.get("fake_message")
+        try:
+            found = fm is not None and int(fm.get("id")) == int(message_id)
+        except (TypeError, ValueError):
+            found = False
+        _record_query(args, fm if found else None, None)
+        return fm if found else None
+    qid = next(_qids)
+    _send({"type": "query", "qid": qid, "query": "get_message", "args": args})
+    # Wait for the core to answer on stdin. Nothing else can interleave: the
+    # core only writes run-requests when idle and query-results on demand.
+    while True:
+        line = sys.stdin.readline()
+        if not line:  # core died
+            _record_query(args, None, "lost connection to core")
+            return None
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("type") == "query_result" and msg.get("qid") == qid:
+            err = msg.get("error")
+            _record_query(args, msg.get("value"), err)
+            if err:
+                log(f"[framework] get_message({message_id}) failed: {err}")
+                return None
+            return msg.get("value")
+
+
+def _record_query(args, value, error):
+    if _ctx is not None:
+        _ctx["queries"].append({"query": "get_message", "args": args,
+                                "result": value, "error": error})
+
+
 FRAMEWORK_FUNCS = {
     "send": send,
     "reply": reply,
@@ -191,6 +253,8 @@ FRAMEWORK_FUNCS = {
     "kv_delete": kv_delete,
     "kv_keys": kv_keys,
     "kv_all": kv_all,
+    "secret_get": secret_get,
+    "get_message": get_message,
 }
 
 EVENT_HANDLERS = [
@@ -245,7 +309,7 @@ def run_event(req: dict) -> dict:
     started = time.monotonic()
 
     result = {"type": "result", "id": rid, "actions": [], "logs": [],
-              "error": None, "duration": 0.0}
+              "queries": [], "error": None, "duration": 0.0}
 
     if not _module_ok:
         result["error"] = {"message": "project code failed to load",
@@ -259,7 +323,9 @@ def run_event(req: dict) -> dict:
         return result
 
     _ctx = {"event": event, "data": data, "actions": result["actions"],
-            "logs": result["logs"]}
+            "logs": result["logs"], "queries": result["queries"],
+            "test_mode": bool(req.get("test")),
+            "fake_message": req.get("fake_message")}
     try:
         if event == "__failure__":
             failure_of = data.get("_failure_of", "?")
@@ -301,7 +367,7 @@ def run_event(req: dict) -> dict:
 
 
 def main():
-    global _kv, _slug
+    global _kv, _slug, _project_dir
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-dir", required=True)
     parser.add_argument("--file", required=True)
@@ -309,6 +375,7 @@ def main():
     parser.add_argument("--slug", default="?")
     args = parser.parse_args()
     _slug = args.slug
+    _project_dir = args.project_dir
 
     sys.path.insert(0, str(Path(args.project_dir).resolve()))
 

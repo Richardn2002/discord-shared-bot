@@ -28,6 +28,11 @@ HANDLER_TEMPLATE = '''\
 #   kv_delete(key)
 #   kv_keys()
 #   kv_all()                               dict of the whole store
+#   secret_get(key, default=None)          read the .env secret store
+#                                          (KV tab; read-only from code)
+#   get_message(message_id, channel_id=None)
+#                                          fetch any message the bot can see;
+#                                          returns a dict like below, or None
 #
 # Handlers below are called when the matching Discord event fires. Delete the
 # ones you do not care about (or leave them commented). If a handler raises
@@ -42,6 +47,11 @@ def on_message(message):
         "channel_id", "channel_name",
         "guild_id", "guild_name",      # None in DMs
         "attachments": [url, ...],
+        "reply_to": {{"message_id", "channel_id"}} or None,  # when a reply
+        "mentions": [{{"id", "name", "display_name"}}, ...],
+        "mention_everyone": bool, "pinned": bool,
+        "created_at": iso str, "edited_at": iso str or None,
+        "jump_url": str,
     }}"""
     pass
 

@@ -101,3 +101,40 @@ btw user should still be able to see every piece of info about generated actions
 
 
 very good. additionally, make ui form (rename the button to simply "ui" when you are done) the default editor, and make the content field a textbox with multiline support, as people can send multiline messages
+
+
+More upgrades:
+- Expose more metadata of message, including self message id, message id of the being replied to message (if any), etc.
+- Add one primitive with which can get message by message id
+- Add a "secret store" for each project. No need for real/test split, a project has one. Storage is backed by a .env file. Interface is similar to existing interface in the KV tab, located just beneath. Bot only has read access so add one primitive to read from secret store.
+
+Remember to upgrade all docs accordingly when you are done
+
+Basically we are trying to build an LLM chatbot, and these are two major issues within the existing framework:
+- where to store api-key so that it will not be committed together with the files
+- how to let llm bot be aware of the content of the message summoning it is replying to
+
+propose your implementation and ask for ambiguities before you start touching any files
+
+
+---
+
+Questions
+1. "self message id" — the message's own id already exists as message["id"], so I read this as the bot's own identity, which I'm exposing as message["me"] = {"id", "name"} (useful for "was I mentioned?"). Correct, or did you mean something else?
+2. get_message failure → return None + console log (my proposal) vs. raise into your on_failure — confirm None-behavior? (None makes on_message_delete + reply-chasing bots much simpler.)
+3. Secrets shown masked with click-to-reveal in the UI (my proposal, still fully visible/editable after reveal — "trusted friends" level stays) vs. always plain text?
+4. Primitive names: get_message(...) and secret_get(key, default=None) (matches kv_get style) — ok, or prefer plain secret(key)?
+5. One placement nit: you said secrets UI goes in the KV tab beneath the tables — I'd keep the real/test KV switcher applying only to KV (secrets have no split, as requested). Confirm.
+
+---
+
+1. oh, I did not know that message id is already present in the message object (looks like the cheatsheet text is wrong). then nevermind. no need for your proposed "me" field
+2. follow your proposal
+3. always plain text
+4. get_message and secret_get look good
+5. yes
+
+now go  
+
+
+one thing I completely forgot: how to test with get_message() primitive... my proposal is to create a new block in test tab, between Fake event and Results, where user can configure one fake message. get_message() on its id will return the message, and get_message() on any id else will return None. the UI is similiar to the ui configuring message of fake event

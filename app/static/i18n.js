@@ -63,7 +63,7 @@ window.CHEATSHEET = {
     {
       title: "Events",
       rows: [
-        ["on_message(message)", "new message. message: content, author{name, id, display_name}, channel_id, channel_name, guild_id, guild_name, attachments"],
+        ["on_message(message)", "new message. message: id, content, author{id, name, display_name}, channel_id, channel_name, guild_id, guild_name, attachments, reply_to{message_id, channel_id} or null, mentions[...], mention_everyone, pinned, created_at, edited_at, jump_url"],
         ["on_message_edit(message)", "message edited. same dict plus old_content (None if uncached)"],
         ["on_message_delete(message)", "message deleted. content/author may be None (uncached)"],
         ["on_reaction_add(reaction)", "reaction: emoji, message_id, channel_id, user{...}, message_author{...}"],
@@ -83,13 +83,20 @@ window.CHEATSHEET = {
       ],
     },
     {
-      title: "KV store",
+      title: "Lookups",
+      rows: [
+        ["get_message(message_id, channel_id=None)", "fetch any message the bot can see (default channel: the event's). Returns the same dict on_message gets, or None on failure (also logged). Example: get_message(message[\"reply_to\"][\"message_id\"]). In tests: returns the Test tab's fake lookup message when the id matches (else None) — never touches Discord."],
+      ],
+    },
+    {
+      title: "KV & secrets",
       rows: [
         ["kv_get(key, default=None)", "read a value"],
         ["kv_set(key, value)", "write (value must be JSON-serializable)"],
         ["kv_delete(key) / kv_keys() / kv_all()", "delete / list keys / whole store as dict"],
+        ["secret_get(key, default=None)", "read the project's secret store (.env, edited in the KV tab). Read-only from code. Never committed to git. For API keys etc."],
       ],
-      note: "Persistent across restarts and deploys. View/edit it in the KV tab; tests use a throwaway copy.",
+      note: "KV is persistent across restarts and deploys; view/edit it in the KV tab — tests use a throwaway copy. Secrets edits apply immediately.",
     },
     {
       title: "Notes",
@@ -106,7 +113,7 @@ window.CHEATSHEET = {
     {
       title: "事件",
       rows: [
-        ["on_message(message)", "新消息。message 字段：content、author{name, id, display_name}、channel_id、channel_name、guild_id、guild_name、attachments"],
+        ["on_message(message)", "新消息。message 字段：id、content、author{id, name, display_name}、channel_id、channel_name、guild_id、guild_name、attachments、reply_to{message_id, channel_id} 或 null、mentions[...]、mention_everyone、pinned、created_at、edited_at、jump_url"],
         ["on_message_edit(message)", "消息被编辑。字段同上，另有 old_content（未缓存时为 None）"],
         ["on_message_delete(message)", "消息被删除。content/author 可能为 None（未缓存）"],
         ["on_reaction_add(reaction)", "reaction 字段：emoji、message_id、channel_id、user{...}、message_author{...}"],
@@ -126,13 +133,20 @@ window.CHEATSHEET = {
       ],
     },
     {
-      title: "KV 存储",
+      title: "查询",
+      rows: [
+        ["get_message(message_id, channel_id=None)", "获取机器人可见的任意消息（默认频道为事件所在频道）。返回与 on_message 相同的字典，失败时返回 None（并写入日志）。例：get_message(message[\"reply_to\"][\"message_id\"])。测试时：若 id 与 Test 页配置的假消息一致则返回它，否则返回 None；测试中不会访问 Discord。"],
+      ],
+    },
+    {
+      title: "KV 与密钥",
       rows: [
         ["kv_get(key, default=None)", "读取"],
         ["kv_set(key, value)", "写入（值必须可 JSON 序列化）"],
         ["kv_delete(key) / kv_keys() / kv_all()", "删除 / 列出所有键 / 返回整个存储的字典"],
+        ["secret_get(key, default=None)", "读取项目密钥（.env，在 KV 页下方编辑）。代码中只读。不会被提交到 git。用于存放 API key 等。"],
       ],
-      note: "重启和部署后仍然保留。KV 页可直接查看编辑；测试时使用临时副本。",
+      note: "KV 在重启和部署后仍然保留；KV 页可直接查看编辑，测试时使用临时副本。密钥的修改立即生效。",
     },
     {
       title: "须知",

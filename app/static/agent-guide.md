@@ -49,8 +49,16 @@ Message dict:
 {"id": 1001, "content": "text", "old_content": null,
  "author": {"id": 42, "name": "alice", "display_name": "Alice"},
  "channel_id": 555, "channel_name": "general",
- "guild_id": 999, "guild_name": "Our Server", "attachments": []}
+ "guild_id": 999, "guild_name": "Our Server", "attachments": [],
+ "reply_to": {"message_id": 555, "channel_id": 555},
+ "mentions": [{"id": 42, "name": "alice", "display_name": "Alice"}],
+ "mention_everyone": false, "pinned": false,
+ "created_at": "2026-01-01T12:00:00+00:00", "edited_at": null,
+ "jump_url": "https://discord.com/channels/999/555/1001"}
 ```
+`reply_to` is present only when the message is a reply (null otherwise).
+Fetch the replied-to message's content with
+`get_message(message["reply_to"]["message_id"])`.
 Reaction dict:
 ```json
 {"emoji": "👍", "message_id": 1001, "channel_id": 555, "channel_name": "general",
@@ -72,6 +80,8 @@ no loops. Custom emojis arrive as `"<:name:id>"`.
 | `send_file(filename, content, channel_id=None)` | attach a file; `content` is `str` or `bytes` |
 | `log(msg)` / `print(...)` | write to the project console |
 | `kv_get(key, default=None)` / `kv_set(key, value)` / `kv_delete(key)` / `kv_keys()` / `kv_all()` | persistent per-project JSON store; **values must be JSON-serializable** |
+| `get_message(message_id, channel_id=None)` | fetch any message the bot can see (channel defaults to the event's). Returns the message dict above, or **None** on any failure (not found / no access / bot offline — also logged). Lookups appear under `queries` in results. **In test mode it never touches Discord**: pass `fake_message` with the test call — an id matching it returns it, any other id returns None. |
+| `secret_get(key, default=None)` | read the project's `.env` secret store (read-only from code). Strings. File is gitignored by convention. |
 
 Rules of thumb:
 - Handlers must finish quickly (see `timeout`); never busy-wait.
@@ -109,6 +119,10 @@ curl -X POST $BASE/api/projects/me/test -d '{"event":"on_message","data":{"id":1
   "content":"!hi","author":{"id":42,"name":"t","display_name":"T"},
   "channel_id":555,"channel_name":"general","guild_id":9,"guild_name":"G","attachments":[]}}'
 
+# if your code uses get_message(): pass "fake_message" — a message dict that
+# get_message() will return when asked for its id (any other id → None).
+# In test mode get_message NEVER touches Discord.
+
 # DEPLOY: draft becomes live (compile-checked first), worker restarts.
 # Response includes the worker state — "broken" + init_error means your file
 # fails at import time.
@@ -142,6 +156,17 @@ curl -X DELETE "$BASE/api/projects/me/kv/score"
 # export file:  curl -OJ "$BASE/api/projects/me/kv?download=1"
 ```
 
+### Secrets (one .env store per project; no real/test split)
+```bash
+curl $BASE/api/projects/me/secrets                        # whole store as JSON
+curl -X PUT $BASE/api/projects/me/secrets -d '{"OPENAI_KEY": "sk-..."}'   # replace all
+curl -X PUT $BASE/api/projects/me/secrets/OPENAI_KEY -d '{"value": "sk-..."}'
+curl -X DELETE $BASE/api/projects/me/secrets/OPENAI_KEY
+```
+Keys must match `[A-Za-z_][A-Za-z0-9_]*`, values are plain strings. Changes
+apply immediately (read from disk on every `secret_get` call). The .env file
+is listed in files/.gitignore so it won't end up in the shared git repo.
+
 ### Packages
 ```bash
 curl $BASE/api/packages                                   # installed (name, version)
@@ -156,7 +181,12 @@ curl -X POST $BASE/api/packages/install -d '{"spec":"cowsay"}'       # returns p
 3. `POST .../compile` → fix until `{"ok": true}`.
 4. `POST .../test` with **realistic fake events** — several cases, including
    inputs that should *not* trigger. Check `actions` are exactly what the user
-   asked for and `logs` show no surprises.
+   asked for, `queries` show the lookups you expect, and `logs` show no
+   surprises. Note: without a Discord token, `get_message()` returns None —
+   code should tolerate that. The fake-event payload templates the web UI uses
+   live in the guide's section 2 example dicts; include the new fields
+   (`reply_to`, `mentions`, `mention_everyone`, `pinned`, `created_at`,
+   `edited_at`, `jump_url`) for realism.
 5. If the feature needs state: check `GET .../kv`, then use `kv_*` in code.
 6. Iterate: also test error paths (`on_failure`) and slow paths (stay well
    under `timeout` seconds).

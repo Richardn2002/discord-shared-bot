@@ -66,6 +66,10 @@ class Project:
     def console_path(self) -> Path:
         return self.dir / "console.log"
 
+    @property
+    def env_path(self) -> Path:
+        return self.dir / ".env"
+
     # -- metadata ----------------------------------------------------------
     @property
     def deployed(self) -> bool:
@@ -218,6 +222,43 @@ def deploy(project: Project) -> None:
     shutil.copyfile(project.draft, project.handler)
     project.meta["deployed_at"] = now_iso()
     project.save_meta()
+
+
+# -- secret store (.env-backed) -----------------------------------------------
+
+def secrets_read(project: Project) -> dict:
+    from .envfile import parse_env
+    try:
+        return parse_env(project.env_path.read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def secrets_write(project: Project, data: dict) -> None:
+    from .envfile import KEY_RE, dump_env
+    for k, v in data.items():
+        if not KEY_RE.match(k):
+            raise ProjectError(f"invalid secret key {k!r} (use [A-Za-z0-9_], not starting with a digit)")
+        if not isinstance(v, str):
+            raise ProjectError("secret values must be strings")
+    project.env_path.write_text(dump_env(data))
+
+
+def secrets_set(project: Project, key: str, value) -> None:
+    if not isinstance(value, str):
+        raise ProjectError("secret values must be strings")
+    data = secrets_read(project)
+    data[key] = value
+    secrets_write(project, data)
+
+
+def secrets_delete(project: Project, key: str) -> bool:
+    data = secrets_read(project)
+    if key in data:
+        del data[key]
+        secrets_write(project, data)
+        return True
+    return False
 
 
 def console_append(project: Project, line: str, level: str = "INFO") -> None:

@@ -23,16 +23,33 @@ def user_payload(u) -> dict:
 
 def message_payload(m: discord.Message, old_content=None) -> dict:
     guild = m.guild
+    # inheritance/forward references exist too; this platform only treats real
+    # replies (MessageType.reply) as reply targets
+    reply_to = None
+    try:
+        if (m.type == discord.MessageType.reply and m.reference
+                and m.reference.message_id):
+            reply_to = {"message_id": m.reference.message_id,
+                        "channel_id": m.reference.channel_id}
+    except Exception:
+        pass
     return {
         "id": m.id,
-        "content": m.content,
+        "content": getattr(m, "content", None),
         "old_content": old_content,
-        "author": user_payload(m.author),
+        "author": user_payload(m.author) if m.author else None,
         "channel_id": m.channel.id,
         "channel_name": getattr(m.channel, "name", None) or "dm",
         "guild_id": guild.id if guild else None,
         "guild_name": guild.name if guild else None,
-        "attachments": [a.url for a in (m.attachments or [])],
+        "attachments": [a.url for a in (getattr(m, "attachments", None) or [])],
+        "reply_to": reply_to,
+        "mentions": [user_payload(u) for u in (getattr(m, "mentions", None) or [])],
+        "mention_everyone": bool(getattr(m, "mention_everyone", False)),
+        "pinned": bool(getattr(m, "pinned", False)),
+        "created_at": m.created_at.isoformat() if getattr(m, "created_at", None) else None,
+        "edited_at": m.edited_at.isoformat() if getattr(m, "edited_at", None) else None,
+        "jump_url": getattr(m, "jump_url", None),
     }
 
 
@@ -120,6 +137,16 @@ class DiscordExecutor:
     async def send_text(self, channel_id: int, content: str) -> None:
         ch = await self._channel(channel_id)
         await ch.send(content)
+
+    async def fetch_message(self, channel_id: int, message_id: int):
+        """Used by the get_message framework primitive. Returns a payload dict,
+        None when not found/inaccessible."""
+        try:
+            ch = await self._channel(channel_id)
+            m = await ch.fetch_message(message_id)
+            return message_payload(m)
+        except (discord.NotFound, discord.Forbidden):
+            return None
 
     async def execute(self, action: dict) -> None:
         kind = action.get("action")
