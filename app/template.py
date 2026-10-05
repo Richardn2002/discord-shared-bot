@@ -17,8 +17,15 @@ HANDLER_TEMPLATE = '''\
 #   add_reaction(emoji, message_id=None)   react to the triggering message
 #                                          (or a message id you pass)
 #   send_embed(title=None, description=None, color=0x5865F2, fields=None,
-#              channel_id=None)            send a rich embed; fields is a list
-#                                          of {{"name": ..., "value": ..., "inline": True}}
+#              channel_id=None, url=None, image=None, thumbnail=None,
+#              author=None, footer=None, timestamp=None)
+#                                          send a rich embed card.
+#                                          fields: list of {{"name","value","inline"}}
+#                                          url: makes the title a link
+#                                          image/thumbnail: image URLs
+#                                          author: {{"name","url","icon_url"}} or str
+#                                          footer: {{"text","icon_url"}} or str
+#                                          timestamp: ISO-8601 str or epoch secs
 #   send_file(filename, content, channel_id=None)
 #                                          attach a file; content is str or bytes
 #   log(msg)                               write to this project's console

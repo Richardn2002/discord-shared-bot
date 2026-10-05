@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+from datetime import datetime, timezone
 
 import discord
 
@@ -164,7 +165,27 @@ class DiscordExecutor:
                 title=e.get("title"),
                 description=e.get("description"),
                 color=discord.Color(e.get("color") or 0x5865F2),
+                url=e.get("url"),
             )
+            if e.get("image"):
+                embed.set_image(url=e["image"])
+            if e.get("thumbnail"):
+                embed.set_thumbnail(url=e["thumbnail"])
+            if isinstance(e.get("author"), dict) and e["author"].get("name"):
+                a = e["author"]
+                embed.set_author(name=str(a["name"])[:256],
+                                 url=a.get("url"), icon_url=a.get("icon_url"))
+            if isinstance(e.get("footer"), dict) and e["footer"].get("text"):
+                f_ = e["footer"]
+                embed.set_footer(text=str(f_["text"])[:2048],
+                                 icon_url=f_.get("icon_url"))
+            if e.get("timestamp") is not None:
+                ts = e["timestamp"]
+                if isinstance(ts, (int, float)):
+                    embed.timestamp = datetime.fromtimestamp(
+                        ts, tz=timezone.utc)
+                else:
+                    embed.timestamp = datetime.fromisoformat(str(ts))
             for f in (e.get("fields") or [])[:25]:
                 embed.add_field(name=str(f.get("name", ""))[:256],
                                 value=str(f.get("value", ""))[:1024],

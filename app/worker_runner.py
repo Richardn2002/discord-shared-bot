@@ -140,15 +140,28 @@ def add_reaction(emoji, message_id=None):
     _record({"action": "react", "channel_id": ch, "message_id": mid, "emoji": str(emoji)})
 
 
-def send_embed(title=None, description=None, color=0x5865F2, fields=None, channel_id=None):
+def send_embed(title=None, description=None, color=0x5865F2, fields=None,
+               channel_id=None, url=None, image=None, thumbnail=None,
+               author=None, footer=None, timestamp=None):
+    """Rich embed card. fields=[{"name":..,"value":..,"inline":bool}]
+    (max 25). url makes the title a link. image/thumbnail take image URLs.
+    author: {"name":.., "url":.., "icon_url":..} or a plain string.
+    footer: {"text":.., "icon_url":..} or a plain string.
+    timestamp: ISO-8601 string or unix epoch seconds."""
     ch = channel_id if channel_id is not None else _event_channel()
     if ch is None:
         log("[framework] send_embed() dropped: no channel context")
         return
     if isinstance(color, str):
         color = int(color.lstrip("#"), 16)
+    if isinstance(author, str):
+        author = {"name": author}
+    if isinstance(footer, str):
+        footer = {"text": footer}
     embed = {"title": title, "description": description, "color": color,
-             "fields": fields or []}
+             "fields": fields or [], "url": url, "image": image,
+             "thumbnail": thumbnail, "author": author, "footer": footer,
+             "timestamp": timestamp}
     _record({"action": "send", "channel_id": ch, "embed": embed})
 
 

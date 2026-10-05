@@ -510,15 +510,28 @@ function actionCard(a, nickname) {
   if (a.action === "send" && a.embed) {
     const e = a.embed;
     const color = typeof e.color === "number" ? "#" + e.color.toString(16).padStart(6, "0") : "#5865f2";
+    const author = typeof e.author === "string" ? { name: e.author } : e.author;
+    const footer = typeof e.footer === "string" ? { text: e.footer } : e.footer;
     return h("div", { class: "action-card" },
       h("div", { class: "action-kind" }, `${nickname} · send_embed`),
       h("div", { class: "embed-card", style: `border-left-color:${color}` },
-        e.title ? h("div", { class: "embed-title" }, e.title) : null,
-        e.description ? h("div", { class: "embed-desc" }, e.description) : null,
-        (e.fields || []).length ? h("div", { class: "embed-fields" },
-          e.fields.map((f) => h("div", { class: "embed-field",
-            style: f.inline === false ? "grid-column: 1 / -1" : "" },
-            h("div", { class: "fname" }, f.name), h("div", { class: "fvalue" }, f.value)))) : null),
+        h("div", { class: "embed-body" },
+          h("div", { class: "embed-left" },
+            author && author.name ? h("div", { class: "embed-author" },
+              author.icon_url ? h("img", { src: author.icon_url, alt: "" }) : null,
+              author.url ? h("a", { href: author.url, target: "_blank" }, author.name) : h("span", null, author.name)) : null,
+            e.title ? h("div", { class: "embed-title" },
+              e.url ? h("a", { href: e.url, target: "_blank" }, e.title) : e.title) : null,
+            e.description ? h("div", { class: "embed-desc" }, e.description) : null,
+            (e.fields || []).length ? h("div", { class: "embed-fields" },
+              e.fields.map((f) => h("div", { class: "embed-field",
+                style: f.inline === false ? "grid-column: 1 / -1" : "" },
+                h("div", { class: "fname" }, f.name), h("div", { class: "fvalue" }, f.value)))) : null),
+          e.thumbnail ? h("img", { class: "embed-thumb", src: e.thumbnail, alt: "thumbnail" }) : null),
+        e.image ? h("img", { class: "embed-image", src: e.image, alt: "embed image" }) : null,
+        ((footer && footer.text) || e.timestamp) ? h("div", { class: "embed-footer" },
+          footer && footer.icon_url ? h("img", { src: footer.icon_url, alt: "" }) : null,
+          h("span", null, [footer && footer.text, e.timestamp].filter(Boolean).join(" · "))) : null),
       h("div", { class: "action-meta" }, `color: ${color}` + (meta(["embed"]) ? "  ·  " + meta(["embed"]) : "")));
   }
 
