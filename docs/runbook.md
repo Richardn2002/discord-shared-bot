@@ -6,10 +6,11 @@ For whoever runs this in production (you). Complements the developer handoff.
 
 ```
 ~/discord-shared-bot/        # repo (public upstream: github.com/Richardn2002/discord-shared-bot)
-  config.json                # NOT in git — token, access_token, listen/port/domain, site_title/fonts/log_level
+  config.json                # NOT in git — token, access_token, listen/port/domain, site_title/fonts/log_level, projects_enabled, archive
   venv/                      # shared environment; platform deps live here
   files/                     # git repo (owner-initialized) with all projects; .env files ignored
   run.sh                     # ./run.sh to start (binds CONFIG.listen:CONFIG.port)
+  archive/                   # local SQLite index/search DB + backups; attachments on Nextcloud
 ```
 
 nginx (cloudflare full TLS, origin certs), location `/bot/` →
@@ -27,6 +28,12 @@ config.json includes the `/bot` prefix and must match.
 | a project misbehaving | worker Stop in dashboard → events skip it; or delete the project entirely |
 | add a python package | Packages page (or `POST /api/packages/install {"spec":...}`) |
 | bot offline | check config.json `token`, intents in Discord portal, nginx/cloudflare |
+| archive-only test instance | set `projects_enabled: false` or env `PROJECTS_ENABLED=0`; bot archives but does not dispatch project events |
+| force archive catch-up | `./venv/bin/python tools/archive_backfill.py` |
+| full archive reconcile (catch old edits/missed deletes) | `./venv/bin/python tools/archive_reconcile.py --only-channel <id>` or `--guild <id>` or `--all` |
+| reconcile without deleting missing messages | add `--no-prune` |
+| archive stats/quality | `./venv/bin/python tools/archive_status.py --monthly --top 10` |
+| archive backup now | `./venv/bin/python tools/archive_backup.py` |
 
 ## State machine for project workers
 

@@ -27,6 +27,12 @@ cp config.example.json config.json   # then edit it
 | font_ui     | CSS font stack for the interface text                     |
 | font_code   | CSS font stack for code (editor, consoles)                |
 | log_level   | `DEBUG` / `INFO` / `WARNING` / `ERROR`                    |
+| projects_enabled | `false` runs archive-only mode: bot connects and archives, but never dispatches events to project workers (env `PROJECTS_ENABLED=0` also works) |
+| archive     | local SQLite archive + Nextcloud blob storage; see `config.example.json` |
+
+The running platform reads its Discord token from `config.json` (or the
+`DISCORD_TOKEN` environment variable). The repo-root `DISCORD_TOKEN` file is
+reserved for standalone tooling and is not read by the bot.
 
 ### Deploying under a path prefix
 
@@ -97,6 +103,43 @@ simulate events) — events just don't come from Discord and actions are dropped
   `files/.gitignore` so shared git history stays secret-free.
 * **Packages**: the Packages page wraps `pip install/uninstall` into the shared
   venv. New workers (deploy/restart) pick them up.
+
+## Archive mode
+
+The platform can run as a pure archive instance. Set `projects_enabled` to
+`false` (or `PROJECTS_ENABLED=0`) when testing with a real bot token on a
+second machine; the bot still receives gateway events and maintains the
+archive, but no project handlers run and no project messages are sent.
+
+Archive data lives under `archive/` (gitignored): SQLite metadata/search index
+locally, attachment bytes on Nextcloud via WebDAV. On startup the archive
+service runs an incremental catch-up scan, then applies live create/edit/delete
+events. Periodic catch-up defaults to every 60 minutes
+(`archive.sync_interval_minutes`). Use `tools/archive_backfill.py`,
+`tools/archive_status.py`, and `tools/archive_backup.py` for manual work.
+
+Incremental sync only follows messages after each channel's stored cursor. It
+cannot see edits to older messages that happened while the bot was offline. For
+that, run a manual full reconciliation:
+
+```bash
+# one channel or thread
+./venv/bin/python tools/archive_reconcile.py --only-channel <id>
+
+# one guild, or everything
+./venv/bin/python tools/archive_reconcile.py --guild <guild_id>
+./venv/bin/python tools/archive_reconcile.py --all
+
+# detect missing messages without deleting them
+./venv/bin/python tools/archive_reconcile.py --only-channel <id> --no-prune
+```
+
+A reconcile pass re-scans from the beginning of each selected channel/thread,
+so it catches ancient edits. With pruning enabled (the default), archived
+messages that Discord no longer returns are treated as missed deletes and
+removed, including their Nextcloud blobs. Inaccessible channels are skipped
+without pruning. This is deliberately manual because a full pass costs far more
+API calls than the hourly incremental sync.
 
 ## Dev endpoints
 

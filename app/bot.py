@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 
 import discord
 
+from .archive.service import archive_service
+from .config import CONFIG
 from .manager import Manager
 
 STATUS = {"online": False, "user": None, "guilds": [], "latency_ms": None}
@@ -80,6 +82,8 @@ class BotClient(discord.Client):
         self.manager = manager
 
     def _dispatch(self, event: str, data: dict):
+        if not CONFIG.projects_enabled:
+            return
         asyncio.create_task(self.manager.dispatch(event, data))
 
     async def on_ready(self):
@@ -97,20 +101,37 @@ class BotClient(discord.Client):
         STATUS["online"] = False
 
     async def on_message(self, m: discord.Message):
+        # Archive all guild messages (including bots) before project dispatch.
+        archive_service.enqueue_message(m)
         if m.author.bot:
             return
         self._dispatch("on_message", message_payload(m))
 
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        archive_service.enqueue_message(after)
         if after.author and after.author.bot:
             return
         self._dispatch("on_message_edit",
                        message_payload(after, old_content=before.content))
 
     async def on_message_delete(self, m: discord.Message):
+        # Archive deletes are handled by on_raw_message_delete so uncached
+        # messages are covered too. This callback remains for projects.
         if m.author and m.author.bot:
             return
         self._dispatch("on_message_delete", message_payload(m))
+
+    async def on_raw_message_delete(self, payload):
+        if getattr(payload, "guild_id", None) is not None:
+            archive_service.enqueue_delete(payload.message_id, payload.channel_id)
+
+    async def on_raw_bulk_message_delete(self, payload):
+        if getattr(payload, "guild_id", None) is not None:
+            archive_service.enqueue_delete_many(payload.message_ids)
+
+    async def on_bulk_message_delete(self, messages):
+        if messages and getattr(messages[0], "guild", None) is not None:
+            archive_service.enqueue_delete_many([m.id for m in messages])
 
     async def on_reaction_add(self, reaction: discord.Reaction, user):
         if user.bot:

@@ -8,5 +8,35 @@
   "site_title": "🤖 shared-bot",
   "font_ui": "-apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
   "font_code": "\"SF Mono\", \"Cascadia Code\", Consolas, monospace",
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "projects_enabled": true,
+  "archive": {
+    "enabled": true,
+    "dir": "archive",
+    "database": "archive.db",
+    "cache_dir": "archive/cache",
+    "cache_max_bytes": 10737418240,
+    "download_attachments": true,
+    "download_direct_links": true,
+    "download_embed_media": false,
+    "keep_local_after_upload": false,
+    "max_concurrent_downloads": 4,
+    "max_concurrent_jobs": 4,
+    "nextcloud": {
+      "enabled": true,
+      "url": "https://cloud.example.com",
+      "username": "your-nextcloud-user",
+      "app_password": "PASTE_APP_PASSWORD_OR_USE_NEXTCLOUD_APP_PASSWORD_ENV",
+      "base_path": "discord-archive",
+      "verify_tls": true,
+      "timeout": 120
+    },
+    "backup": {
+      "enabled": true,
+      "interval_hours": 24,
+      "keep": 7
+    },
+    "sync_on_startup": true,
+    "sync_interval_minutes": 60
+  }
 }

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import bot, packages, projects
+from .archive.service import archive_service
 from .config import APP_DIR, CONFIG
 from .kvstore import KVStore
 from .manager import Manager
@@ -31,9 +32,11 @@ def _project_or_404(slug: str) -> projects.Project:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await archive_service.start()
     await bot.start_bot(manager, CONFIG.token)
     yield
     await bot.stop_bot()
+    await archive_service.stop()
     await manager.shutdown()
 
 
@@ -112,8 +115,10 @@ async def get_status():
         "bot": bot.STATUS,
         "bot_configured": bool(CONFIG.token),
         "domain": CONFIG.domain,
+        "projects_enabled": CONFIG.projects_enabled,
         "projects": len(projects.list_all()),
         "deployed": len([p for p in projects.list_all() if p.deployed]),
+        "archive": archive_service.status(),
     }
 
 

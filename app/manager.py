@@ -361,6 +361,9 @@ class Manager:
         """Dispatch an event to all deployed projects, aggregate plain-text
         sends in project creation order, execute everything via `executor`.
         Returns a trace (used by the dev/simulate endpoint and tests)."""
+        if not CONFIG.projects_enabled:
+            return {"event": event, "projects": {}, "messages_sent": [],
+                    "flush": "projects disabled (archive-only mode)"}
         executor = executor or self.executor
         if executor is None:
             raise RuntimeError("no executor available (bot offline)")
