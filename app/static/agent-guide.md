@@ -105,6 +105,11 @@ Archive message results have the same useful fields as event messages:
 `id`, `content`, `author{id,name,display_name,is_bot}`, `channel_id`,
 `channel_name`, `guild_id`, `guild_name`, `attachments`, `embeds`, `reply_to`,
 `pinned`, `created_at`/`created_ts`, `edited_at`/`edited_ts`, `jump_url`.
+They also include `mentions[{id,name,display_name,is_bot}]`, `mention_everyone`,
+`mention_roles`, `reference_type` (`0` reply, `1` forward),
+`reference_guild_id`, and `forward` for forwarded snapshots
+(`message_id`, `channel_id`, `guild_id`, `content`, `timestamp`, `author`,
+`mentions`, `embeds`, `attachments`).
 IDs are integers in project code. Search responses also carry `next_cursor`,
 `has_more`, `total` and `order`.
 

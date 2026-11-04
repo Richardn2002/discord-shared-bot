@@ -122,7 +122,7 @@ window.CHEATSHEET = {
         ["archive_heatmap(guild_id=None, channel_id=None, after=None, before=None, bucket=\"hour\", tz_offset=0, include_bots=True)", "activity buckets: {bucket_seconds, tz_offset_minutes, items:[{bucket_start, messages, authors, chars, attachments, heat}]}. tz_offset is minutes east of UTC."],
         ["archive_attachment_meta(attachment_id)", "archived attachment metadata (no bytes): filename, content_type, size_bytes, state, sha256, available."],
       ],
-      note: "Archive calls are read-only and record under queries in test results. Unlike get_message(), tests may query the real archive. A message dict has id, content, author, channel/guild ids and names, attachments, embeds, reply_to, timestamps and jump_url.",
+      note: "Archive calls are read-only and record under queries in test results. Unlike get_message(), tests may query the real archive. Message dicts also expose mentions, mention_everyone/mention_roles, reference_type/reference_guild_id, and forward snapshots with their source message/channel/guild ids.",
     },
     {
       title: "KV & secrets",
@@ -186,7 +186,7 @@ window.CHEATSHEET = {
         ["archive_heatmap(guild_id=None, channel_id=None, after=None, before=None, bucket=\"hour\", tz_offset=0, include_bots=True)", "活跃度分桶：{bucket_seconds, tz_offset_minutes, items:[{bucket_start, messages, authors, chars, attachments, heat}]}。tz_offset 为 UTC 以东分钟数。"],
         ["archive_attachment_meta(attachment_id)", "归档附件元数据（不含字节）：filename、content_type、size_bytes、state、sha256、available。"],
       ],
-      note: "归档函数只读，并在测试结果的 queries 中记录。与 get_message() 不同，测试时允许查询真实归档。消息字典包含 id、content、author、频道/服务器 id 与名称、attachments、embeds、reply_to、时间戳与 jump_url。",
+      note: "归档函数只读，并在测试结果的 queries 中记录。与 get_message() 不同，测试时允许查询真实归档。消息字典还包含 mentions、mention_everyone/mention_roles、reference_type/reference_guild_id，以及带来源消息/频道/服务器 id 的 forward 快照。",
     },
     {
       title: "KV 与密钥",

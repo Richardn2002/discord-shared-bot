@@ -426,3 +426,34 @@ body.archive-mode main {
   .qb-field, .qb-op, .qb-value { flex-basis: 100%; }
   .qb-row > .danger-text { margin-left: auto; }
 }
+
+/* Discord-style mentions, replies and forwarded snapshots */
+.discord-mention {
+  color: #c9cdfb; background: rgba(88,101,242,.18);
+  border-radius: 4px; padding: 0 3px; text-decoration: none;
+}
+a.discord-mention:hover { background: rgba(88,101,242,.35); text-decoration: none; }
+.discord-channel-mention { color: #9ab3ff; }
+.discord-role-mention { color: #d7c9ff; }
+.discord-time { color: var(--text-dim); background: rgba(255,255,255,.045); border-radius: 4px; padding: 0 3px; }
+.reply-preview.clickable {
+  cursor: pointer; border-radius: 4px; padding: 3px 6px;
+  transition: background .12s ease;
+}
+.reply-preview.clickable:hover { background: rgba(255,255,255,.055); }
+.forward-card {
+  margin-top: 7px; padding: 8px 11px; max-width: 620px;
+  border: 1px solid var(--border); border-left: 3px solid #7c8cff;
+  border-radius: 8px; background: rgba(88,101,242,.055);
+}
+.forward-label { font-size: 11px; font-weight: 700; color: #aeb7ff; margin-bottom: 3px; }
+.forward-author { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 2px; }
+.forward-content { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.forward-content a { color: #9ab3ff; }
+.forward-card .file-chip { font-size: 11.5px; }
+.forward-jump {
+  display: inline-block; margin-top: 6px; padding: 0;
+  background: transparent; border: none; color: #9ab3ff;
+  font-size: 11.5px; cursor: pointer;
+}
+.forward-jump:hover { background: transparent; color: #c9d3ff; text-decoration: underline; }

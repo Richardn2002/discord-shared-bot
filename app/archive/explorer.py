@@ -36,15 +36,24 @@ def attachment_payload(row, *, string_ids: bool = True) -> dict:
     }
 
 
-def message_payload(row: dict, attachments=None, reply=None, *,
-                    string_ids: bool = True) -> dict:
-    raw = {}
-    try:
-        raw = json.loads(row.get("raw_json") or "{}")
-    except Exception:
-        raw = {}
+def _mentions_payload(raw: dict, *, string_ids: bool) -> list[dict]:
+    out = []
+    for user in raw.get("mentions") or []:
+        if not isinstance(user, dict):
+            continue
+        out.append({
+            "id": _sid(user.get("id"), string_ids),
+            "name": user.get("username") or user.get("name"),
+            "display_name": (user.get("global_name") or user.get("display_name")
+                             or user.get("username") or user.get("name")),
+            "is_bot": bool(user.get("bot")),
+        })
+    return out
+
+
+def _embeds_payload(raw: dict, *, limit: int = 5) -> list[dict]:
     embeds = []
-    for e in (raw.get("embeds") or [])[:5]:
+    for e in (raw.get("embeds") or [])[:limit]:
         if not isinstance(e, dict):
             continue
         embeds.append({
@@ -79,6 +88,59 @@ def message_payload(row: dict, attachments=None, reply=None, *,
                 "height": (e.get("thumbnail") or {}).get("height"),
             } if isinstance(e.get("thumbnail"), dict) else None,
         })
+    return embeds
+
+
+def _forward_payload(raw: dict, *, string_ids: bool) -> dict | None:
+    ref = raw.get("message_reference") or {}
+    snapshots = raw.get("message_snapshots") or []
+    snap = None
+    if snapshots and isinstance(snapshots[0], dict):
+        candidate = snapshots[0].get("message")
+        if isinstance(candidate, dict):
+            snap = candidate
+    if ref.get("type") != 1 and snap is None:
+        return None
+    snap = snap or {}
+    author = snap.get("author") if isinstance(snap.get("author"), dict) else {}
+    return {
+        "message_id": _sid(ref.get("message_id"), string_ids),
+        "channel_id": _sid(ref.get("channel_id"), string_ids),
+        "guild_id": _sid(ref.get("guild_id"), string_ids),
+        "content": snap.get("content") or "",
+        "timestamp": snap.get("timestamp"),
+        "author": {
+            "id": _sid(author.get("id"), string_ids),
+            "name": author.get("username") or author.get("name"),
+            "display_name": (author.get("global_name") or author.get("display_name")
+                             or author.get("username") or author.get("name")),
+            "is_bot": bool(author.get("bot")),
+        } if author else None,
+        "mentions": _mentions_payload(snap, string_ids=string_ids),
+        "embeds": _embeds_payload(snap),
+        "attachments": [{
+            "id": _sid(a.get("id"), string_ids),
+            "filename": a.get("filename"),
+            "content_type": a.get("content_type"),
+            "size_bytes": a.get("size"),
+            "width": a.get("width"),
+            "height": a.get("height"),
+        } for a in (snap.get("attachments") or []) if isinstance(a, dict)],
+    }
+
+
+def message_payload(row: dict, attachments=None, reply=None, *,
+                    string_ids: bool = True) -> dict:
+    raw = {}
+    try:
+        raw = json.loads(row.get("raw_json") or "{}")
+    except Exception:
+        raw = {}
+    ref = raw.get("message_reference") or {}
+    ref_type = ref.get("type")
+    embeds = _embeds_payload(raw)
+    mentions = _mentions_payload(raw, string_ids=string_ids)
+    forward = _forward_payload(raw, string_ids=string_ids)
     reply_to = None
     if reply:
         reply_to = {
@@ -115,6 +177,12 @@ def message_payload(row: dict, attachments=None, reply=None, *,
         "pinned": bool(row.get("pinned")),
         "has_attachments": bool(row.get("has_attachments")),
         "has_embeds": bool(row.get("has_embeds")),
+        "reference_type": ref_type,
+        "reference_guild_id": _sid(ref.get("guild_id"), string_ids),
+        "mention_everyone": bool(raw.get("mention_everyone")),
+        "mentions": mentions,
+        "mention_roles": [str(r) for r in (raw.get("mention_roles") or [])],
+        "forward": forward,
         "attachments": [attachment_payload(a, string_ids=string_ids)
                         for a in (attachments or [])],
         "embeds": embeds,

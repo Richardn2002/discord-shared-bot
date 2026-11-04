@@ -1129,7 +1129,42 @@ function archiveEsc(s) {
 function archiveEscapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function archiveFormatText(text, terms) {
+function archiveFmtDiscordTimestamp(ts, style) {
+  const n = Number(ts);
+  if (!Number.isFinite(n)) return String(ts);
+  const d = new Date(n * 1000);
+  if (style === "t") return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (style === "T") return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (style === "d") return d.toLocaleDateString();
+  if (style === "D") return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  if (style === "R") {
+    const diff = Math.round((d.getTime() - Date.now()) / 1000);
+    const abs = Math.abs(diff);
+    const units = [["year", 31536000], ["month", 2592000], ["day", 86400],
+      ["hour", 3600], ["minute", 60], ["second", 1]];
+    for (const [unit, sec] of units) {
+      if (abs >= sec || unit === "second") {
+        return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
+          .format(Math.round(diff / sec), unit);
+      }
+    }
+  }
+  return archiveFmtDateTime(n);
+}
+
+function archiveDiscordLinkHtml(url, label) {
+  const text = label || url;
+  const m = url.match(/^https?:\/\/(?:www\.)?(?:discord\.com|discordapp\.com)\/channels\/(\d+)\/(\d+)(?:\/(\d+))?\/?$/);
+  if (m && (!archiveState.guildId || String(m[1]) === String(archiveState.guildId))) {
+    const href = m[3]
+      ? `#/archive?channel=${encodeURIComponent(m[2])}&around=${encodeURIComponent(m[3])}`
+      : `#/archive?channel=${encodeURIComponent(m[2])}`;
+    return `<a class="discord-link" href="${href}">${text}</a>`;
+  }
+  return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+}
+
+function archiveFormatText(text, terms, msg) {
   let s = archiveEsc(text || "");
   const safeTerms = (terms || []).filter((t) => String(t).trim()).map((t) => archiveEsc(t));
   for (const term of safeTerms) {
@@ -1144,8 +1179,41 @@ function archiveFormatText(text, terms) {
   s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-  s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
+  // Stash generated links so the generic URL pass cannot re-link their hrefs.
+  const links = [];
+  const stashLink = (html) => {
+    links.push(html);
+    return `\u0005${links.length - 1}\u0006`;
+  };
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label, url) => stashLink(archiveDiscordLinkHtml(url, label)));
+
+  // Discord entities. Resolution maps come from the archived raw payload.
+  const mentions = new Map((msg && msg.mentions || []).map((u) => [String(u.id), u]));
+  s = s.replace(/&lt;@!?(\d+)&gt;/g, (_, id) => {
+    const u = mentions.get(String(id));
+    const name = (u && (u.display_name || u.name)) || String(id);
+    return `<span class="discord-mention" title="user ${id}">@${archiveEsc(name)}</span>`;
+  });
+  s = s.replace(/&lt;@everyone&gt;/g, '<span class="discord-mention">@everyone</span>');
+  s = s.replace(/&lt;@here&gt;/g, '<span class="discord-mention">@here</span>');
+  s = s.replace(/&lt;@&amp;(\d+)&gt;/g,
+    '<span class="discord-mention discord-role-mention">@role</span>');
+  s = s.replace(/&lt;#(\d+)&gt;/g, (_, id) => {
+    const ch = (archiveState.channels || []).find((c) => String(c.id) === String(id));
+    return `<a class="discord-mention discord-channel-mention" ` +
+      `href="#/archive?channel=${encodeURIComponent(id)}">#${archiveEsc(ch && ch.name || id)}</a>`;
+  });
+  s = s.replace(/&lt;t:(\d+)(?::([tTdDfFR]))?&gt;/g, (_, ts, style) =>
+    `<span class="discord-time" title="${archiveEsc(archiveFmtDateTime(Number(ts)))}">` +
+    `${archiveEsc(archiveFmtDiscordTimestamp(ts, style || "f"))}</span>`);
+
+  // Angle-bracket links suppress Discord embeds; keeping the link is enough.
+  s = s.replace(/&lt;(https?:\/\/[^\s<]+)&gt;/g, "$1");
+  s = s.replace(/(https?:\/\/[^\s<]+)/g, (url) => stashLink(archiveDiscordLinkHtml(url)));
   s = s.replace(/\n/g, "<br>");
+  s = s.replace(/\u0005(\d+)\u0006/g, (_, i) => links[Number(i)] || "");
   s = s.replace(/\u0001([\s\S]*?)\u0002/g, "<mark>$1</mark>");
   s = s.replace(/\u0003(\d+)\u0004/g, (_, i) => blocks[Number(i)] || "");
   return s;
@@ -1710,12 +1778,27 @@ function archiveMessageRow(m, grouped, terms) {
   if (archiveState.allChannels || archiveState.resultMode === "query") {
     body.append(h("div", { class: "msg-channel" }, `# ${m.channel_name || m.channel_id}`));
   }
-  if (m.reply_to) {
-    body.append(h("div", { class: "reply-preview" },
+  if (m.reply_to && m.reference_type !== 1) {
+    const target = {
+      id: m.reference_message_id || m.reply_to.id,
+      channel_id: m.reference_channel_id || m.channel_id,
+      guild_id: m.reference_guild_id || m.guild_id,
+    };
+    body.append(h("div", {
+      class: "reply-preview clickable",
+      role: "button", tabindex: "0",
+      title: "jump to original message",
+      onclick: () => jumpToOriginalMessage(target),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") jumpToOriginalMessage(target); },
+    },
       h("span", { class: "dim" }, `↪ ${m.reply_to.author_name || "unknown"}: `),
-      h("span", { html: archiveFormatText(m.reply_to.content || "(no text)", terms) })));
+      h("span", { html: archiveFormatText(m.reply_to.content || "(no text)", terms, m) })));
   }
-  if (m.content) body.append(h("div", { class: "msg-content", html: archiveFormatText(m.content, terms) }));
+  if (m.content) body.append(h("div", { class: "msg-content", html: archiveFormatText(m.content, terms, m) }));
+  if (m.forward) {
+    const card = archiveForwardCard(m, terms);
+    if (card) body.append(card);
+  }
   const atts = m.attachments || [];
   if (atts.length) {
     const grid = h("div", { class: "msg-attach-grid" });
@@ -1742,6 +1825,38 @@ function archiveMessageRow(m, grouped, terms) {
   const isAnchor = String(m.id) === String(archiveState.anchorMessageId);
   return h("div", { class: `msg-row${grouped ? " grouped" : ""}${m.pinned ? " pinned" : ""}${isAnchor ? " anchor" : ""}`,
     "data-mid": m.id }, avatar, body);
+}
+
+function archiveForwardCard(m, terms) {
+  const f = m.forward;
+  if (!f) return null;
+  const card = h("div", { class: "forward-card" },
+    h("div", { class: "forward-label" }, "↪ Forwarded message"));
+  if (f.author && (f.author.display_name || f.author.name)) {
+    card.append(h("div", { class: "forward-author" }, f.author.display_name || f.author.name));
+  }
+  if (f.content) {
+    card.append(h("div", { class: "forward-content", html: archiveFormatText(f.content, terms, f) }));
+  }
+  if ((f.attachments || []).length) {
+    card.append(h("div", { class: "msg-attach-grid" },
+      f.attachments.map((a) => h("span", { class: "file-chip dim", title: "forwarded attachment metadata" },
+        "📎 ", a.filename || "file", a.size_bytes ? ` · ${archiveFmtSize(a.size_bytes)}` : ""))));
+  }
+  const target = { id: f.message_id, channel_id: f.channel_id, guild_id: f.guild_id };
+  const sameGuild = !f.guild_id || !archiveState.guildId ||
+    String(f.guild_id) === String(archiveState.guildId);
+  if (target.id && sameGuild && (m.reply_to || f.content)) {
+    card.append(h("button", {
+      class: "forward-jump", onclick: () => jumpToOriginalMessage(target),
+    }, "jump to original message"));
+  } else if (f.guild_id && f.channel_id && f.message_id) {
+    card.append(h("a", {
+      class: "forward-jump", target: "_blank", rel: "noopener",
+      href: `https://discord.com/channels/${f.guild_id}/${f.channel_id}/${f.message_id}`,
+    }, "open original in Discord"));
+  }
+  return card;
 }
 
 function archiveEmbedCard(e) {
