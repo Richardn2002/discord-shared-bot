@@ -66,6 +66,7 @@ def make_snapshot(db: Path, out_dir: Path) -> tuple[Path, dict]:
     subprocess.run(["zstd", "-T0", "-10", "-q", "-f",
                     str(raw), "-o", str(compressed)], check=True)
     raw.unlink()
+    stats["snapshot"] = compressed.name
     manifest = out_dir / f"manifest-{stamp}.json"
     manifest.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
     return compressed, {"stats": stats, "manifest": manifest}

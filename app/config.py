@@ -13,6 +13,7 @@ _DEFAULT_ARCHIVE = {
     "enabled": True,
     "dir": "archive",
     "sync_on_startup": True,
+    "startup_restore": True,
     "sync_interval_minutes": 60,
     "database": "archive.db",
     "cache_dir": "archive/cache",

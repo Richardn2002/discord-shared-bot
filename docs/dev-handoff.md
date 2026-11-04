@@ -159,7 +159,8 @@ the safe way to run a second dev instance with a real token.
 
 Relevant `archive` keys (see `config.example.json`): `enabled`, `dir`,
 `database`, `cache_dir`, `cache_max_bytes`, `max_concurrent_downloads`,
-`max_concurrent_jobs`, `sync_on_startup`, `sync_interval_minutes`,
+`max_concurrent_jobs`, `sync_on_startup`, `startup_restore`,
+`sync_interval_minutes`,
 `download_attachments`, `download_direct_links`, `nextcloud` (`enabled`, `url`,
 `username`, `app_password`, `base_path`, `verify_tls`, ...), and backup settings.
 The running platform reads Nextcloud credentials from `config.json` only; the
@@ -190,8 +191,14 @@ Useful read/query methods already present:
 
 ### Implemented lifecycle behavior
 
-- Startup runs an incremental catch-up scan, then live gateway create/edit/delete
-  events are applied in order. Periodic incremental sync defaults to 60 min.
+- Startup first checks Nextcloud `backups/` for a newer snapshot. Newer remote
+  manifests are downloaded, decompressed, validated (`quick_check`, schema
+  version), and atomically swapped in before `ArchiveStore` opens. The previous
+  local DB is kept as `archive.db.pre-restore`. Controlled by
+  `archive.startup_restore` (default true).
+- Startup then runs an incremental catch-up scan, and live gateway
+  create/edit/delete events are applied in order. Periodic incremental sync
+  defaults to 60 min.
 - `projects_enabled: false` suppresses project dispatch only; archiving continues.
 - Edits compare `edited_ts`, so stale backfill cannot overwrite a newer edit.
 - Deleted message IDs get tombstones so a later backfill cannot resurrect them.

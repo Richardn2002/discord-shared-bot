@@ -124,6 +124,11 @@ daily activity heatmap with clickable hot moments. Attachments stream through th
 core, so Nextcloud credentials never reach the browser. Read-only endpoints live
 under `/api/archive/*`.
 
+On startup the archive service checks Nextcloud `backups/` for a newer snapshot.
+If another instance ran while this one was offline, it downloads and validates
+that SQLite dump before opening the local DB, then resumes normal incremental
+sync. Disable with `archive.startup_restore: false`.
+
 Projects can query the same archive from handlers through injected functions:
 `archive_search(...)`, `archive_query(filter, ...)`, `archive_context(...)`,
 `archive_message(...)`, `archive_channels(...)`, `archive_guilds()`,

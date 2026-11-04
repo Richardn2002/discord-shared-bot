@@ -34,6 +34,7 @@ config.json includes the `/bot` prefix and must match.
 | reconcile without deleting missing messages | add `--no-prune` |
 | archive stats/quality | `./venv/bin/python tools/archive_status.py --monthly --top 10` |
 | archive backup now | `./venv/bin/python tools/archive_backup.py` |
+| startup restore | automatic: if Nextcloud has a newer backup, it is restored before sync; disable with `archive.startup_restore: false` |
 
 ## State machine for project workers
 

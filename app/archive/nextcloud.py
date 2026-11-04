@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import aiohttp
 
@@ -111,6 +112,42 @@ class NextcloudStore:
                 await self._request("MKCOL", self._path_url(current),
                                     expect=(200, 201, 204, 405))
             self._ready_dirs.add(path)
+
+    async def list_dir(self, path: str) -> list[dict]:
+        """List one WebDAV directory (Depth: 1). Returns name/size/modified."""
+        body = (b'<?xml version="1.0"?>'
+                b'<d:propfind xmlns:d="DAV:"><d:prop>'
+                b'<d:getlastmodified/><d:getcontentlength/><d:resourcetype/>'
+                b'</d:prop></d:propfind>')
+        status, data = await self._request(
+            "PROPFIND", self._path_url(path), data=body,
+            headers={"Depth": "1", "Content-Type": "application/xml; charset=utf-8"},
+            expect=(207, 404),
+        )
+        if status == 404:
+            return []
+        root = ET.fromstring(data)
+        ns = {"d": "DAV:"}
+        out = []
+        for resp in root.findall("d:response", ns):
+            href = (resp.findtext("d:href", default="", namespaces=ns) or "").rstrip("/")
+            name = unquote(href.rsplit("/", 1)[-1]) if href else ""
+            if not name:
+                continue
+            prop = resp.find("d:propstat/d:prop", ns)
+            if prop is None:
+                continue
+            size = prop.findtext("d:getcontentlength", default=None, namespaces=ns)
+            modified = prop.findtext("d:getlastmodified", default=None, namespaces=ns)
+            collection = prop.find("d:resourcetype/d:collection", ns) is not None
+            out.append({
+                "name": name,
+                "size": int(size) if size and size.isdigit() else None,
+                "modified": modified,
+                "is_dir": collection,
+                "href": href,
+            })
+        return out
 
     async def exists(self, path: str) -> bool:
         status, _ = await self._request("HEAD", self._path_url(path),

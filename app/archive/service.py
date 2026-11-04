@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
+import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +21,7 @@ from .backfill import BackfillRunner
 from .discord_source import DiscordSource
 from .ingest import ArchiveIngestor
 from .nextcloud import NextcloudStore
-from .store import ArchiveStore
+from .store import SCHEMA_VERSION, ArchiveStore, _iso_ts
 
 log = logging.getLogger("archive.service")
 
@@ -130,6 +133,48 @@ def _message_payload(message) -> dict:
     }
 
 
+def _local_db_state(path: Path) -> dict:
+    state = {"exists": path.exists(), "mtime": 0.0, "schema_version": None,
+             "messages": 0, "newest_ts": 0.0, "error": None}
+    if not path.exists():
+        return state
+    state["mtime"] = path.stat().st_mtime
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            state["schema_version"] = int(row[0]) if row and row[0] is not None else None
+            state["messages"] = int(conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+            state["newest_ts"] = float(conn.execute(
+                "SELECT COALESCE(MAX(created_ts),0) FROM messages").fetchone()[0])
+        finally:
+            conn.close()
+    except Exception as e:
+        state["error"] = str(e)
+    return state
+
+
+def _validate_restored_db(path: Path) -> dict:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    try:
+        check = conn.execute("PRAGMA quick_check").fetchone()[0]
+        if check != "ok":
+            raise RuntimeError(f"sqlite quick_check failed: {check}")
+        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        schema = int(row[0]) if row and row[0] is not None else None
+        if schema != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"snapshot schema_version={schema}, expected {SCHEMA_VERSION}")
+        return {
+            "schema_version": schema,
+            "messages": int(conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]),
+            "newest_ts": float(conn.execute(
+                "SELECT COALESCE(MAX(created_ts),0) FROM messages").fetchone()[0]),
+        }
+    finally:
+        conn.close()
+
+
 class ArchiveService:
     """Owns the live archive pipeline. Safe to import when archiving is off."""
 
@@ -151,6 +196,112 @@ class ArchiveService:
         self.last_sync_result: dict | None = None
         self.last_sync_error: str | None = None
 
+    async def _restore_newer_remote_backup(self, db_path: Path) -> bool:
+        """Before opening the local DB, replace it with a newer Nextcloud
+        snapshot if one exists. This lets a dev/VPS instance that was offline
+        catch up from the other instance's latest backup without a full scan."""
+        if not self.cfg.get("startup_restore", True):
+            return False
+        if self.nextcloud is None:
+            return False
+        backup_dir = f"{self.nextcloud.base_path}/backups"
+        local = _local_db_state(db_path)
+        try:
+            async with self.nextcloud:
+                entries = await self.nextcloud.list_dir(backup_dir)
+                manifests = sorted(
+                    (e for e in entries
+                     if not e.get("is_dir") and e["name"].startswith("manifest-")
+                     and e["name"].endswith(".json")),
+                    key=lambda e: e["name"], reverse=True)
+                if not manifests:
+                    log.info("archive startup restore: no remote backups found")
+                    return False
+                for entry in manifests:
+                    try:
+                        raw_manifest = await self.nextcloud.read_bytes(
+                            f"{backup_dir}/{entry['name']}")
+                        manifest = json.loads(raw_manifest.decode("utf-8"))
+                    except Exception as e:
+                        log.warning("archive startup restore: cannot read %s: %s",
+                                    entry["name"], e)
+                        continue
+                    stats = manifest.get("stats") if isinstance(manifest.get("stats"), dict) else manifest
+                    remote_created = _iso_ts(stats.get("created_at")) or 0.0
+                    remote_newest = _iso_ts(stats.get("newest")) or 0.0
+                    remote_messages = int(stats.get("messages") or 0)
+                    future = (not local["exists"] or local["messages"] == 0
+                              or remote_newest > local["newest_ts"] + 1
+                              or (remote_created > local["mtime"] + 60
+                                  and remote_messages >= local["messages"]))
+                    if not future:
+                        log.info("archive startup restore: local db is current "
+                                 "(remote %s)", entry["name"])
+                        return False
+                    snapshot = stats.get("snapshot") or entry["name"].replace(
+                        "manifest-", "archive-").replace(".json", ".db.zst")
+                    remote_snapshot = f"{backup_dir}/{snapshot}"
+                    tmp_dir = CONFIG.archive_dir / "tmp"
+                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                    db_path.parent.mkdir(parents=True, exist_ok=True)
+                    token = uuid.uuid4().hex
+                    compressed = tmp_dir / f"restore-{token}.db.zst"
+                    # Keep the decompressed file next to the target DB so the
+                    # final os.replace() is atomic (not cross-filesystem).
+                    restored = db_path.with_name(f".{db_path.name}.restore-{token}")
+                    try:
+                        log.info("archive startup restore: downloading %s", remote_snapshot)
+                        await self.nextcloud.download_to(remote_snapshot, compressed)
+                        subprocess.run(
+                            ["zstd", "-d", "-q", "-f", str(compressed), "-o", str(restored)],
+                            check=True, capture_output=True,
+                        )
+                        info = _validate_restored_db(restored)
+                        if (local["exists"] and local["messages"] > 0
+                                and info["newest_ts"] <= local["newest_ts"] + 1):
+                            # Same newest message is acceptable only when the
+                            # remote snapshot was taken after the local DB was
+                            # last touched (edits/deletes/prunes may differ).
+                            if not (remote_created > local["mtime"] + 60
+                                    and info["messages"] >= local["messages"]):
+                                log.info("archive startup restore: snapshot is not newer "
+                                         "than local db; keeping local")
+                                return False
+                        rollback = db_path.with_name(db_path.name + ".pre-restore")
+                        moved_old = False
+                        if db_path.exists():
+                            db_path.replace(rollback)
+                            moved_old = True
+                        for suffix in ("-wal", "-shm"):
+                            db_path.with_name(db_path.name + suffix).unlink(missing_ok=True)
+                        try:
+                            restored.replace(db_path)
+                        except Exception:
+                            # Roll back if the final swap fails for any reason.
+                            if moved_old and rollback.exists() and not db_path.exists():
+                                rollback.replace(db_path)
+                            raise
+                        log.info("archive startup restore: restored %s (%s messages, "
+                                 "newest_ts=%s)", snapshot, info["messages"],
+                                 info["newest_ts"])
+                        return True
+                    except FileNotFoundError:
+                        log.warning("archive startup restore: zstd is not installed; "
+                                    "cannot restore remote snapshots")
+                        return False
+                    except Exception as e:
+                        log.warning("archive startup restore: failed for %s: %s",
+                                    snapshot, e)
+                        continue
+                    finally:
+                        compressed.unlink(missing_ok=True)
+                        restored.unlink(missing_ok=True)
+                        for suffix in ("-wal", "-shm"):
+                            Path(str(restored) + suffix).unlink(missing_ok=True)
+        except Exception as e:
+            log.warning("archive startup restore failed: %s", e)
+        return False
+
     async def start(self) -> None:
         if not self.enabled or self.running:
             return
@@ -160,7 +311,6 @@ class ArchiveService:
             return
 
         db_path = CONFIG.archive_dir / str(self.cfg.get("database", "archive.db"))
-        self.store = ArchiveStore(db_path)
         cfg = dict(self.cfg)
         cfg["_archive_dir"] = str(CONFIG.archive_dir)
 
@@ -173,6 +323,11 @@ class ArchiveService:
                 self.nextcloud = None
         else:
             self.nextcloud = None
+
+        # Restore before ArchiveStore opens/creates the local DB, otherwise we
+        # would overwrite an open SQLite connection.
+        await self._restore_newer_remote_backup(db_path)
+        self.store = ArchiveStore(db_path)
 
         self.discord = DiscordSource(token)
         await self.discord.__aenter__()
