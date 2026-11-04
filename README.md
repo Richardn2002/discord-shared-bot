@@ -18,7 +18,7 @@ cp config.example.json config.json   # then edit it
 | key         | meaning                                                   |
 |-------------|-----------------------------------------------------------|
 | token       | Discord bot token (or set env `DISCORD_TOKEN`)            |
-| access_token| shared password for the web UI (env `ACCESS_TOKEN`). Share it with friends; `null` = no auth (dev only!) |
+| access_token| one password string or a list of passwords for the web UI (env `ACCESS_TOKENS` comma-separated). Remove an entry to revoke it; `null`/`[]` = no auth (dev only!) |
 | listen      | web listen address (`127.0.0.1` behind a reverse proxy)   |
 | port        | web listen port, e.g. `8000`                              |
 | domain      | public base URL **including any path prefix**, e.g. `https://example.com/bot` (used on the landing page and for the cookie's Secure flag) |
@@ -43,11 +43,13 @@ to the full public URL including the prefix.
 
 ### Access control
 
-Set `access_token` to a long random string and hand it to your friends. Every
-`/api/*` call then requires it; humans log in once via the console's lock screen
-(30-day cookie), scripts/agents send header `X-Token: <token>` (or `?token=`).
-If you expose the port to the internet, put the app behind an HTTPS reverse
-proxy (Caddy/nginx) — the cookie is required over plain HTTP until then.
+Set `access_token` to one long random string, or a JSON list of strings, and
+hand one key to each friend. Every `/api/*` call requires one of the listed
+keys; humans log in once via the console's lock screen (30-day cookie),
+scripts/agents send header `X-Token: <token>` (or `?token=`). To revoke access,
+remove that key from the list and restart the app. If you expose the port to the
+internet, put the app behind an HTTPS reverse proxy (Caddy/nginx) — the cookie
+is required over plain HTTP until then.
 
 ### Pages
 

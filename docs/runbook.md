@@ -68,9 +68,10 @@ the scaling term to watch, not project count).
 
 ## Security notes (trusted-friends deployment)
 
-- Single shared access token gates every `/api/*`; the landing page and
-  static assets are public. Rotate the token in config.json when someone
-  leaves.
+- `access_token` accepts one string or a list of strings; all listed keys gate
+  every `/api/*` (landing page and static assets are public). Revoke one person
+  by removing their key from the list and restarting; rotate all by replacing
+  the list.
 - `.env` files hold API keys; `files/.gitignore` ignores them (never put a
   trailing comment on a gitignore rule — it breaks the pattern).
 - Project code runs unsandboxed as the platform's OS user. Everyone is

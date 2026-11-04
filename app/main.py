@@ -58,9 +58,19 @@ COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
 
 
 def _token_ok(candidate: str | None) -> bool:
-    if not CONFIG.access_token:
+    tokens = CONFIG.access_tokens
+    if not tokens:
         return True
-    return bool(candidate) and hmac.compare_digest(str(candidate), CONFIG.access_token)
+    if not candidate:
+        return False
+    ok = False
+    for token in tokens:
+        try:
+            if hmac.compare_digest(str(candidate), str(token)):
+                ok = True
+        except Exception:
+            continue
+    return ok
 
 
 def _candidate_from(request: Request) -> str | None:
@@ -72,7 +82,7 @@ def _candidate_from(request: Request) -> str | None:
 @app.middleware("http")
 async def auth_guard(request: Request, call_next):
     path = request.url.path
-    if (CONFIG.access_token
+    if (CONFIG.access_tokens
             and path.startswith("/api")
             and not path.startswith("/api/auth/")
             and not _token_ok(_candidate_from(request))):
@@ -86,14 +96,14 @@ async def auth_guard(request: Request, call_next):
 
 @app.get("/api/auth/check")
 async def auth_check(request: Request):
-    if not CONFIG.access_token:
+    if not CONFIG.access_tokens:
         return {"required": False, "ok": True}
     return {"required": True, "ok": _token_ok(_candidate_from(request))}
 
 
 @app.post("/api/auth/login")
 async def auth_login(payload: dict = Body(...), response: Response = None):
-    if not CONFIG.access_token:
+    if not CONFIG.access_tokens:
         return {"ok": True, "required": False}
     token = str(payload.get("token") or "")
     if not _token_ok(token):

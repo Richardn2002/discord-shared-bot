@@ -46,7 +46,8 @@ _DEFAULT_ARCHIVE = {
 _DEFAULTS = {
     "projects_enabled": True,    # false = archive-only mode: no project event dispatch
     "token": None,               # discord bot token; DISCORD_TOKEN env overrides
-    "access_token": None,        # web UI login token; ACCESS_TOKEN env overrides.
+    "access_token": None,        # web login token or list of tokens;
+                                 # ACCESS_TOKEN(S) env overrides.
                                  # null/empty = no auth (dev only!)
     "listen": "0.0.0.0",         # web listen address
     "port": 8000,                # web listen port
@@ -70,6 +71,24 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def _token_values(value) -> list[str]:
+    """Normalize access_token config into a list of accepted tokens."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = value.splitlines() if "\n" in value else [value]
+    elif isinstance(value, (list, tuple)):
+        parts = list(value)
+    else:
+        parts = [value]
+    out = []
+    for part in parts:
+        token = str(part).strip()
+        if token:
+            out.append(token)
+    return out
+
+
 class Config:
     def __init__(self) -> None:
         data = dict(_DEFAULTS)
@@ -90,8 +109,18 @@ class Config:
         self.token: str | None = os.environ.get("DISCORD_TOKEN") or data["token"]
         # The running platform only uses config.json/env for the bot token.
         # The repo-root DISCORD_TOKEN file is reserved for standalone tooling.
+        env_tokens = os.environ.get("ACCESS_TOKENS")
+        if env_tokens:
+            access_values = [x.strip() for x in env_tokens.split(",")]
+        else:
+            access_values = (os.environ.get("ACCESS_TOKEN")
+                             or data.get("access_token")
+                             or data.get("access_tokens"))
+        self.access_tokens: list[str] = list(dict.fromkeys(
+            _token_values(access_values)))
+        # Backwards-compatible singular attribute for any external tooling.
         self.access_token: str | None = (
-            os.environ.get("ACCESS_TOKEN") or data["access_token"] or None)
+            self.access_tokens[0] if self.access_tokens else None)
         self.listen: str = data["listen"]
         self.port: int = int(data["port"])
         self.domain: str = data["domain"]

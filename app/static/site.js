@@ -61,7 +61,7 @@ function updateAuthBadge() {
   if (!AUTH.required) {
     el.className = "badge badge-yellow";
     el.textContent = "⚠ open access";
-    el.title = "No access_token is configured — anyone can use this console.";
+    el.title = "No access_token(s) are configured — anyone can use this console.";
     el.style.cursor = "default";
     el.onclick = null;
     return;

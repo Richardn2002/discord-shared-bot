@@ -341,7 +341,7 @@ recorded under `queries`. No mutating archive API is exposed to projects.
 - Embed actions are not aggregated (Discord limitation, by design).
 - Package env is shared (no per-project isolation); protected closure marks
   platform deps + transitive deps uninstallable.
-- Single shared access token; no per-user auth (trusted-friends deployment).
+- Shared access token list (`access_token` string or list); keys are interchangeable, no per-user accounts. Revoke by removing a key and restarting.
 - Project-facing archive queries are read-only and implemented through the
   worker bridge; project attachment bytes and HTTP Range are still TODO.
 - Archive incremental sync cannot recover ancient edits or deletes that happened

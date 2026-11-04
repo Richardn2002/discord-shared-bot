@@ -1,6 +1,9 @@
 {
   "token": "PASTE_YOUR_BOT_TOKEN_HERE",
-  "access_token": "PICK_A_LONG_RANDOM_STRING_AND_SHARE_IT_WITH_FRIENDS",
+  "access_token": [
+    "PICK_A_LONG_RANDOM_STRING_AND_SHARE_IT_WITH_FRIENDS",
+    "ANOTHER_KEY_YOU_CAN_REVOKE_INDEPENDENTLY"
+  ],
   "listen": "127.0.0.1",
   "port": 8000,
   "domain": "https://your.host.example/bot",
