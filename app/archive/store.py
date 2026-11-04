@@ -18,6 +18,23 @@ from typing import Iterable, Iterator
 
 SCHEMA_VERSION = 2
 
+
+def _regexp(pattern, value) -> int:
+    """Small SQLite REGEXP helper used by the read-only query builder."""
+    if pattern is None or value is None:
+        return 0
+    pattern = str(pattern)
+    if len(pattern) > 500:
+        return 0
+    try:
+        return 1 if re.search(pattern, str(value)) else 0
+    except re.error:
+        return 0
+
+
+class ArchiveQueryError(ValueError):
+    """Raised for an invalid read-only archive query."""
+
 _SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -233,6 +250,7 @@ class ArchiveStore:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.create_function("regexp", 2, _regexp, deterministic=True)
         self.conn.executescript(_SCHEMA)
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
@@ -665,6 +683,440 @@ class ArchiveStore:
                      float(before_ts)),
                 ).fetchall()
         return [int(r["id"]) for r in rows]
+
+    # -- read-only explorer / query engine --------------------------------
+    # Field definitions used by the visual query builder and by future
+    # project-facing archive queries. Keep this whitelist here so both callers
+    # share one implementation and one set of SQL rules.
+    _QUERY_FIELDS = {
+        "id": ("m.id", "id", False, None),
+        "content": ("m.content", "text", False, None),
+        "search_text": ("m.search_text", "text", False, None),
+        "author_id": ("m.author_id", "id", False, None),
+        "author_name": ("m.author_name", "text", False, None),
+        "author_display_name": ("m.author_display_name", "text", False, None),
+        "author_is_bot": ("m.author_is_bot", "bool", False, None),
+        "channel_id": ("m.channel_id", "id", False, None),
+        "channel_name": ("c.name", "text", False, None),
+        "guild_id": ("m.guild_id", "id", False, None),
+        "guild_name": ("g.name", "text", False, None),
+        "created_ts": ("m.created_ts", "date", False, None),
+        "created_at": ("m.created_at", "text", False, None),
+        "edited_ts": ("m.edited_ts", "date", False, None),
+        "edited_at": ("m.edited_at", "text", False, None),
+        "message_type": ("m.message_type", "number", False, None),
+        "reference_message_id": ("m.reference_message_id", "id", False, None),
+        "reference_channel_id": ("m.reference_channel_id", "id", False, None),
+        "pinned": ("m.pinned", "bool", False, None),
+        "has_attachments": ("m.has_attachments", "bool", False, None),
+        "has_embeds": ("m.has_embeds", "bool", False, None),
+        "content_length": ("LENGTH(m.content)", "number", False, None),
+        "attachment_count": (
+            "(SELECT COUNT(*) FROM attachments a WHERE a.message_id=m.id)",
+            "number", False, None),
+        "attachment_filename": ("a.filename", "text", True, "filename"),
+        "attachment_content_type": ("a.content_type", "text", True, "content_type"),
+        "attachment_size_bytes": ("a.size_bytes", "number", True, "size_bytes"),
+        "attachment_kind": ("a.kind", "text", True, "kind"),
+        "attachment_state": ("a.state", "text", True, "state"),
+    }
+    _QUERY_FIELD_ALIASES = {
+        "attachment_name": "attachment_filename",
+        "attachment_type": "attachment_content_type",
+        "attachment_size": "attachment_size_bytes",
+    }
+    _QUERY_OPS = {
+        "contains", "not_contains", "equals", "not_equals", "starts_with",
+        "ends_with", "in", "not_in", "gt", "gte", "lt", "lte", "between",
+        "is_empty", "is_not_empty", "is_true", "is_false", "is_null",
+        "not_null", "regex",
+    }
+
+    @staticmethod
+    def _query_arg(value, kind: str):
+        if kind == "date":
+            if isinstance(value, (int, float)):
+                return float(value)
+            text = str(value).strip()
+            try:
+                return float(text)
+            except ValueError:
+                ts = _iso_ts(text)
+                if ts is None:
+                    raise ArchiveQueryError(f"invalid date value: {value!r}")
+                return ts
+        if kind in ("id", "number"):
+            # IDs are 64-bit Discord snowflakes: never round-trip them through
+            # float, which would silently lose precision.
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, int):
+                return value
+            text = str(value).strip()
+            try:
+                return int(text)
+            except ValueError:
+                try:
+                    return int(float(text))
+                except (TypeError, ValueError):
+                    raise ArchiveQueryError(f"invalid number/id value: {value!r}")
+        if kind == "bool":
+            return 1 if value in (True, 1, "1", "true", "yes") else 0
+        return "" if value is None else str(value)
+
+    @staticmethod
+    def _like_value(value) -> str:
+        escaped = (str(value).replace("\\", "\\\\")
+                   .replace("%", "\\%").replace("_", "\\_"))
+        return f"%{escaped}%"
+
+    def _query_cmp(self, expr: str, op: str, value, kind: str,
+                   field: str) -> tuple[str, list]:
+        op = op.lower()
+        if op not in self._QUERY_OPS:
+            raise ArchiveQueryError(f"unsupported operator: {op}")
+        if op == "is_null":
+            return f"{expr} IS NULL", []
+        if op == "not_null":
+            return f"{expr} IS NOT NULL", []
+        if op == "is_empty":
+            return f"({expr} IS NULL OR {expr}='')", []
+        if op == "is_not_empty":
+            return f"({expr} IS NOT NULL AND {expr}<>'')", []
+        if op == "is_true":
+            return f"{expr}=1", []
+        if op == "is_false":
+            return f"{expr}=0", []
+        if op in ("in", "not_in"):
+            vals = value if isinstance(value, (list, tuple)) else str(value).split(",")
+            vals = [v for v in vals if str(v).strip() != ""]
+            if not vals:
+                return ("1=0" if op == "in" else "1=1"), []
+            args = [self._query_arg(v, kind) for v in vals]
+            mark = ",".join("?" for _ in args)
+            neg = "NOT " if op == "not_in" else ""
+            return f"{expr} {neg}IN ({mark})", args
+        if op == "between":
+            vals = value if isinstance(value, (list, tuple)) else str(value).split(",")
+            if len(vals) != 2:
+                raise ArchiveQueryError("between needs exactly two values")
+            args = [self._query_arg(v, kind) for v in vals]
+            return f"{expr} BETWEEN ? AND ?", args
+        if op == "contains":
+            # The trigram FTS index makes long substring searches much faster.
+            text = str(value)
+            if field == "search_text" and len(text) >= 3:
+                match = self._fts_query(text)
+                return ("m.id IN (SELECT rowid FROM messages_fts "
+                        "WHERE messages_fts MATCH ?)"), [match]
+            return f"{expr} LIKE ? ESCAPE '\\'", [self._like_value(value)]
+        if op == "not_contains":
+            text = str(value)
+            if field == "search_text" and len(text) >= 3:
+                match = self._fts_query(text)
+                return ("m.id NOT IN (SELECT rowid FROM messages_fts "
+                        "WHERE messages_fts MATCH ?)"), [match]
+            return f"{expr} NOT LIKE ? ESCAPE '\\'", [self._like_value(value)]
+        if op == "starts_with":
+            escaped = (str(value).replace("\\", "\\\\")
+                       .replace("%", "\\%").replace("_", "\\_"))
+            return f"{expr} LIKE ? ESCAPE '\\'", [f"{escaped}%"]
+        if op == "ends_with":
+            escaped = (str(value).replace("\\", "\\\\")
+                       .replace("%", "\\%").replace("_", "\\_"))
+            return f"{expr} LIKE ? ESCAPE '\\'", [f"%{escaped}"]
+        if op in ("equals", "not_equals", "gt", "gte", "lt", "lte", "regex"):
+            arg = self._query_arg(value, kind)
+            sql_op = {
+                "equals": "=", "not_equals": "!=", "gt": ">", "gte": ">=",
+                "lt": "<", "lte": "<=", "regex": "REGEXP",
+            }[op]
+            return f"{expr} {sql_op} ?", [arg]
+        raise ArchiveQueryError(f"unsupported operator: {op}")
+
+    def _compile_filter(self, node, depth: int = 0) -> tuple[str, list]:
+        if depth > 8:
+            raise ArchiveQueryError("query is nested too deeply")
+        if not isinstance(node, dict):
+            raise ArchiveQueryError("filter must be an object")
+        kind = node.get("kind")
+        if kind == "group" or (kind is None and "children" in node):
+            op = str(node.get("op") or "AND").upper()
+            if op not in ("AND", "OR", "NOT"):
+                raise ArchiveQueryError(f"unsupported group operator: {op}")
+            children = node.get("children") or []
+            if not isinstance(children, list):
+                raise ArchiveQueryError("group children must be a list")
+            if not children:
+                return "", []
+            parts, args = [], []
+            for child in children:
+                sql, child_args = self._compile_filter(child, depth + 1)
+                if sql:
+                    parts.append(sql)
+                    args.extend(child_args)
+            if not parts:
+                return "", []
+            joined = " AND ".join(parts)
+            if op == "NOT":
+                return f"NOT ({joined})", args
+            return f"({joined})" if op == "AND" else f"({' OR '.join(parts)})", args
+        if kind not in (None, "condition"):
+            raise ArchiveQueryError(f"unsupported filter kind: {kind}")
+
+        field = str(node.get("field") or "").strip()
+        field = self._QUERY_FIELD_ALIASES.get(field, field)
+        spec = self._QUERY_FIELDS.get(field)
+        if spec is None:
+            raise ArchiveQueryError(f"unknown field: {field}")
+        expr, value_kind, is_attachment, attachment_col = spec
+        op = str(node.get("op") or "contains").lower()
+        value = node.get("value")
+        if not is_attachment:
+            return self._query_cmp(expr, op, value, value_kind, field)
+        # Attachment fields mean "at least one attachment matches".
+        inner_sql, args = self._query_cmp(
+            f"a.{attachment_col}", op, value, value_kind, field)
+        return (f"EXISTS (SELECT 1 FROM attachments a "
+                f"WHERE a.message_id=m.id AND {inner_sql})"), args
+
+    def _query_where(self, filter_ast=None, *, guild_id=None, channel_id=None,
+                     author_id=None, before=None, after=None,
+                     include_bots=True) -> tuple[str, list]:
+        where: list[str] = []
+        args: list = []
+        if guild_id:
+            where.append("m.guild_id=?")
+            args.append(int(guild_id))
+        if channel_id:
+            where.append("m.channel_id=?")
+            args.append(int(channel_id))
+        if author_id:
+            where.append("m.author_id=?")
+            args.append(int(author_id))
+        if after:
+            where.append("m.created_ts >= ?")
+            args.append(float(after))
+        if before:
+            where.append("m.created_ts <= ?")
+            args.append(float(before))
+        if not include_bots:
+            where.append("m.author_is_bot=0")
+        if filter_ast:
+            sql, filter_args = self._compile_filter(filter_ast)
+            if sql:
+                where.append(sql)
+                args.extend(filter_args)
+        return ((" WHERE " + " AND ".join(where)) if where else ""), args
+
+    @staticmethod
+    def _message_select() -> str:
+        return ("""
+            SELECT m.*, c.name AS channel_name, c.is_thread AS channel_is_thread,
+                   g.name AS guild_name
+            FROM messages m
+            LEFT JOIN channels c ON c.id=m.channel_id
+            LEFT JOIN guilds g ON g.id=m.guild_id
+        """)
+
+    def query_messages(self, filter_ast=None, *, guild_id=None, channel_id=None,
+                       author_id=None, before=None, after=None, limit=50,
+                       cursor=None, order="desc", include_bots=True,
+                       include_total=True) -> dict:
+        """Run a read-only message query. Shared by the web API and (later) the
+        worker query bridge, so project-facing archive search uses this exact
+        path too."""
+        limit = max(1, min(int(limit), 200))
+        order = "asc" if str(order).lower() == "asc" else "desc"
+        sql_where, args = self._query_where(
+            filter_ast, guild_id=guild_id, channel_id=channel_id,
+            author_id=author_id, before=before, after=after,
+            include_bots=include_bots)
+        page_where, page_args = sql_where, list(args)
+        if cursor:
+            try:
+                cts, cid = str(cursor).split(":", 1)
+                cmp = ">" if order == "asc" else "<"
+                page_where += (f" AND (m.created_ts, m.id) {cmp} (?, ?)"
+                               if page_where else
+                               f" WHERE (m.created_ts, m.id) {cmp} (?, ?)")
+                page_args.extend([float(cts), int(cid)])
+            except (TypeError, ValueError):
+                raise ArchiveQueryError("invalid cursor")
+        direction = order.upper()
+        sql = (self._message_select() + page_where +
+               f" ORDER BY m.created_ts {direction}, m.id {direction} LIMIT ?")
+        page_args.append(limit + 1)
+        with self._lock:
+            rows = self.conn.execute(sql, page_args).fetchall()
+            total = None
+            if include_total:
+                count_sql = ("SELECT COUNT(*) FROM messages m "
+                             "LEFT JOIN channels c ON c.id=m.channel_id "
+                             "LEFT JOIN guilds g ON g.id=m.guild_id" + sql_where)
+                total = int(self.conn.execute(count_sql, args).fetchone()[0])
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = [dict(r) for r in rows]
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            next_cursor = f"{last['created_ts']}:{last['id']}"
+        return {"items": items, "next_cursor": next_cursor,
+                "has_more": has_more, "total": total, "order": order}
+
+    def get_messages(self, message_ids, channel_id=None) -> list[dict]:
+        ids = [int(x) for x in message_ids if x is not None]
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        where = f" WHERE m.id IN ({marks})"
+        args = list(ids)
+        if channel_id:
+            where += " AND m.channel_id=?"
+            args.append(int(channel_id))
+        with self._lock:
+            rows = self.conn.execute(
+                self._message_select() + where +
+                " ORDER BY m.created_ts ASC, m.id ASC", args).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_message(self, message_id, channel_id=None) -> dict | None:
+        rows = self.get_messages([message_id], channel_id=channel_id)
+        return rows[0] if rows else None
+
+    def message_context(self, message_id, *, channel_id=None, before=20,
+                        after=20) -> dict | None:
+        anchor = self.get_message(message_id, channel_id=channel_id)
+        if not anchor:
+            return None
+        cid = int(anchor["channel_id"])
+        before = max(0, min(int(before), 100))
+        after = max(0, min(int(after), 100))
+        with self._lock:
+            older = self.conn.execute(
+                self._message_select() +
+                " WHERE m.channel_id=? AND (m.created_ts,m.id) < (?,?)"
+                " ORDER BY m.created_ts DESC, m.id DESC LIMIT ?",
+                (cid, anchor["created_ts"], anchor["id"], before + 1)).fetchall()
+            newer = self.conn.execute(
+                self._message_select() +
+                " WHERE m.channel_id=? AND (m.created_ts,m.id) > (?,?)"
+                " ORDER BY m.created_ts ASC, m.id ASC LIMIT ?",
+                (cid, anchor["created_ts"], anchor["id"], after + 1)).fetchall()
+        has_older = len(older) > before
+        has_newer = len(newer) > after
+        older = older[:before]
+        newer = newer[:after]
+        items = [dict(r) for r in reversed(older)] + [anchor] + [dict(r) for r in newer]
+        return {"anchor_id": str(anchor["id"]), "items": items,
+                "has_older": has_older, "has_newer": has_newer}
+
+    def attachments_for_messages(self, message_ids) -> dict[str, list[dict]]:
+        ids = [int(x) for x in message_ids if x is not None]
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM attachments WHERE message_id IN ({marks})"
+                " ORDER BY message_id, first_seen, id", ids).fetchall()
+        out: dict[str, list[dict]] = {}
+        for row in rows:
+            d = dict(row)
+            out.setdefault(str(d["message_id"]), []).append(d)
+        return out
+
+    def guilds(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT g.id, g.name, g.icon,
+                          (SELECT COUNT(*) FROM channels c WHERE c.guild_id=g.id)
+                              AS channel_count,
+                          (SELECT COUNT(*) FROM messages m WHERE m.guild_id=g.id)
+                              AS message_count,
+                          (SELECT MAX(m.created_ts) FROM messages m
+                           WHERE m.guild_id=g.id) AS last_ts
+                   FROM guilds g ORDER BY message_count DESC, g.name""").fetchall()
+        return [dict(r) for r in rows]
+
+    def channels(self, guild_id=None) -> list[dict]:
+        where, args = "", []
+        if guild_id:
+            where, args = " WHERE c.guild_id=?", [int(guild_id)]
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT c.id, c.guild_id, c.name, c.type, c.parent_id,
+                          c.position, c.is_thread, c.archived,
+                          (SELECT COUNT(*) FROM messages m WHERE m.channel_id=c.id)
+                              AS message_count,
+                          (SELECT MAX(m.created_ts) FROM messages m
+                           WHERE m.channel_id=c.id) AS last_ts
+                   FROM channels c""" + where +
+                " ORDER BY c.guild_id, c.position, c.name", args).fetchall()
+        return [dict(r) for r in rows]
+
+    def users(self, guild_id=None, q=None, limit=50) -> list[dict]:
+        where, args = [], []
+        if guild_id:
+            where.append("m.guild_id=?")
+            args.append(int(guild_id))
+        if q:
+            where.append("(m.author_name LIKE ? ESCAPE '\\' OR "
+                         "m.author_display_name LIKE ? ESCAPE '\\')")
+            like = self._like_value(q)
+            args.extend([like, like])
+        sql_where = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT m.author_id AS id, MAX(m.author_name) AS name, "
+                "MAX(m.author_display_name) AS display_name, "
+                "MAX(m.author_is_bot) AS is_bot, COUNT(*) AS message_count, "
+                "MAX(m.created_ts) AS last_ts FROM messages m" + sql_where +
+                (" AND " if sql_where else " WHERE ") + "m.author_id IS NOT NULL "
+                "GROUP BY m.author_id ORDER BY message_count DESC LIMIT ?",
+                args + [max(1, min(int(limit), 200))]).fetchall()
+        return [dict(r) for r in rows]
+
+    def heatmap(self, *, guild_id=None, channel_id=None, after=None, before=None,
+                bucket_seconds=3600, tz_offset_minutes=0,
+                include_bots=True) -> dict:
+        bucket_seconds = 86400 if int(bucket_seconds) == 86400 else 3600
+        offset = int(tz_offset_minutes) * 60
+        where, args = [], []
+        if guild_id:
+            where.append("m.guild_id=?")
+            args.append(int(guild_id))
+        if channel_id:
+            where.append("m.channel_id=?")
+            args.append(int(channel_id))
+        if after:
+            where.append("m.created_ts >= ?")
+            args.append(float(after))
+        if before:
+            where.append("m.created_ts <= ?")
+            args.append(float(before))
+        if not include_bots:
+            where.append("m.author_is_bot=0")
+        sql_where = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT CAST((m.created_ts + ?) / ? AS INTEGER) AS b, "
+                "COUNT(*) AS messages, COUNT(DISTINCT m.author_id) AS authors, "
+                "COALESCE(SUM(LENGTH(m.content)),0) AS chars, "
+                "COALESCE(SUM(m.has_attachments),0) AS attachments "
+                "FROM messages m" + sql_where +
+                " GROUP BY b ORDER BY b",
+                [offset, bucket_seconds] + args).fetchall()
+        items = []
+        for row in rows:
+            d = dict(row)
+            d["bucket_start"] = int(d["b"]) * bucket_seconds - offset
+            d["heat"] = int(d["messages"]) + 12 * max(int(d["authors"]) - 1, 0)
+            d.pop("b", None)
+            items.append(d)
+        return {"bucket_seconds": bucket_seconds, "items": items,
+                "tz_offset_minutes": int(tz_offset_minutes)}
 
     # -- search / stats ---------------------------------------------------
     @staticmethod

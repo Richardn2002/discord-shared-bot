@@ -118,6 +118,12 @@ events. Periodic catch-up defaults to every 60 minutes
 (`archive.sync_interval_minutes`). Use `tools/archive_backfill.py`,
 `tools/archive_status.py`, and `tools/archive_backup.py` for manual work.
 
+The console's **Archive** tab browses channels/threads and messages, supports a
+nested query builder over all message fields (AND/OR/NOT), and shows an hourly /
+daily activity heatmap with clickable hot moments. Attachments stream through the
+core, so Nextcloud credentials never reach the browser. Read-only endpoints live
+under `/api/archive/*`.
+
 Incremental sync only follows messages after each channel's stored cursor. It
 cannot see edits to older messages that happened while the bot was offline. For
 that, run a manual full reconciliation:

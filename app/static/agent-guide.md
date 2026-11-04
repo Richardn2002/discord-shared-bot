@@ -167,6 +167,33 @@ Keys must match `[A-Za-z_][A-Za-z0-9_]*`, values are plain strings. Changes
 apply immediately (read from disk on every `secret_get` call). The .env file
 is listed in files/.gitignore so it won't end up in the shared git repo.
 
+### Archive explorer (read-only)
+```bash
+curl "$BASE/api/archive/stats"
+curl "$BASE/api/archive/channels?guild_id=999"
+curl "$BASE/api/archive/messages?channel_id=555&limit=50&before=1730000000"
+curl "$BASE/api/archive/context?message_id=1001&before=20&after=20"
+curl "$BASE/api/archive/heatmap?bucket=hour&tz_offset=480"
+```
+Complex search uses a nested filter tree:
+```bash
+curl -X POST $BASE/api/archive/query -d '{
+  "filter": {"kind":"group","op":"AND","children":[
+    {"kind":"condition","field":"content","op":"contains","value":"Rust"},
+    {"kind":"group","op":"OR","children":[
+      {"kind":"condition","field":"attachment_filename","op":"contains","value":"png"},
+      {"kind":"condition","field":"pinned","op":"is_true"}
+    ]}
+  ]},
+  "channel_id":"555","limit":50}'
+```
+Fields include message content, author/channel/server ids and names, dates,
+pinned/attachments/embeds flags, reply ids, attachment filename/type/size/count,
+and message length. Operators include contains / not_contains, equals, starts_with,
+ends_with, in, comparisons, between, is_empty, is_true/is_false, and regex.
+Snowflake IDs in responses are strings. The same store methods will back future
+project-facing `archive_*` handler primitives.
+
 ### Packages
 ```bash
 curl $BASE/api/packages                                   # installed (name, version)

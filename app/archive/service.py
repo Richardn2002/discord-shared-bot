@@ -40,6 +40,7 @@ def _guild_payload(guild) -> dict:
 
 def _channel_payload(channel, guild_id: int | None) -> dict:
     ctype = getattr(channel, "type", None)
+    ctype = getattr(ctype, "value", ctype)
     try:
         ctype = int(ctype)
     except Exception:

@@ -194,6 +194,15 @@ class NextcloudStore:
                 raise NextcloudError(f"download {path} -> {r.status}")
             return await r.read()
 
+    async def iter_bytes(self, path: str, chunk_size: int = 256 * 1024):
+        """Yield a remote file in chunks for the web attachment endpoint."""
+        assert self.session
+        async with self.session.get(self._path_url(path)) as r:
+            if r.status not in (200, 206):
+                raise NextcloudError(f"download {path} -> {r.status}")
+            async for chunk in r.content.iter_chunked(chunk_size):
+                yield chunk
+
     async def download_to(self, path: str, dest: Path) -> None:
         assert self.session
         dest.parent.mkdir(parents=True, exist_ok=True)

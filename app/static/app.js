@@ -1010,18 +1010,1073 @@ async function projectSettingsTab(root, info) {
 }
 
 // ---------------------------------------------------------------------------
+// archive explorer
+// ---------------------------------------------------------------------------
+const ARCHIVE_FIELDS = [
+  { id: "content", label: "Message content", type: "text" },
+  { id: "author_display_name", label: "Author display name", type: "text" },
+  { id: "author_name", label: "Author username", type: "text" },
+  { id: "author_id", label: "Author", type: "id" },
+  { id: "author_is_bot", label: "Author is a bot", type: "bool" },
+  { id: "channel_name", label: "Channel name", type: "text" },
+  { id: "channel_id", label: "Channel", type: "id" },
+  { id: "guild_name", label: "Server name", type: "text" },
+  { id: "guild_id", label: "Server", type: "id" },
+  { id: "created_ts", label: "Message date", type: "date" },
+  { id: "edited_ts", label: "Edited date", type: "date" },
+  { id: "pinned", label: "Pinned", type: "bool" },
+  { id: "has_attachments", label: "Has attachments", type: "bool" },
+  { id: "has_embeds", label: "Has embeds", type: "bool" },
+  { id: "attachment_filename", label: "Attachment filename", type: "text" },
+  { id: "attachment_content_type", label: "Attachment type", type: "text" },
+  { id: "attachment_size_bytes", label: "Attachment size (bytes)", type: "number" },
+  { id: "attachment_kind", label: "Attachment kind", type: "text" },
+  { id: "attachment_count", label: "Attachment count", type: "number" },
+  { id: "content_length", label: "Message length", type: "number" },
+  { id: "message_type", label: "Message type", type: "number" },
+  { id: "id", label: "Message ID", type: "id" },
+  { id: "reference_message_id", label: "Reply target ID", type: "id" },
+  { id: "search_text", label: "Full searchable text", type: "text" },
+];
+const ARCHIVE_OPS = {
+  text: ["contains", "not_contains", "equals", "not_equals", "starts_with", "ends_with", "regex", "is_empty", "is_not_empty"],
+  number: ["equals", "not_equals", "gt", "gte", "lt", "lte", "between", "is_null", "not_null"],
+  id: ["equals", "not_equals", "gt", "gte", "lt", "lte", "between", "is_null", "not_null"],
+  date: ["equals", "not_equals", "gt", "gte", "lt", "lte", "between", "is_null", "not_null"],
+  bool: ["is_true", "is_false"],
+};
+const ARCHIVE_OP_LABEL = {
+  contains: "contains", not_contains: "does not contain", equals: "is", not_equals: "is not",
+  starts_with: "starts with", ends_with: "ends with", regex: "matches regex",
+  in: "is one of", not_in: "is not one of",
+  gt: "after / greater than", gte: "on or after / at least",
+  lt: "before / less than", lte: "on or before / at most",
+  between: "between", is_empty: "is empty", is_not_empty: "is not empty",
+  is_true: "is true", is_false: "is false", is_null: "is empty (null)", not_null: "is not empty",
+};
+const ARCHIVE_NO_VALUE = new Set(["is_empty", "is_not_empty", "is_true", "is_false", "is_null", "not_null"]);
+const ARCHIVE_ID_KEYS = new Set(["id", "guild_id", "channel_id", "author_id", "reference_message_id", "reference_channel_id", "parent_id"]);
+
+let archiveState = null;
+let archiveUi = {};
+
+function archiveT(key, fallback) {
+  const lang = (window.getLang && getLang()) || "en";
+  const dict = (window.I18N && (I18N[lang] || {})) || {};
+  return dict[key] ?? ((window.I18N && I18N.en && I18N.en[key]) || fallback || key);
+}
+
+function archiveNewState() {
+  return {
+    guildId: null, channels: [], guilds: [], users: [], stats: null,
+    channelId: null, allChannels: false, channelQuery: "",
+    threadOpen: new Set(),
+    resultMode: "browse", activeFilter: null, timeWindow: null,
+    anchorMessageId: null, newerCursor: null,
+    includeBots: true, queryOrder: "desc",
+    messages: [], cursor: null, total: null, loading: false, loadingMore: false,
+    builder: { kind: "group", op: "AND", children: [
+      { kind: "condition", field: "content", op: "contains", value: "" },
+    ] },
+    heat: { bucket: "hour", days: 90, metric: "heat", cell: 10, data: null, loading: false },
+    quickSearch: "",
+  };
+}
+
+function archiveTzOffset() { return -new Date().getTimezoneOffset(); }
+function archiveLocalBucket(ts, seconds) {
+  const off = archiveTzOffset() * 60;
+  return Math.floor((ts + off) / seconds) * seconds - off;
+}
+function archiveField(id) { return ARCHIVE_FIELDS.find((f) => f.id === id) || ARCHIVE_FIELDS[0]; }
+function archiveFmtDate(ts) {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleDateString(undefined,
+    { year: "numeric", month: "short", day: "numeric" });
+}
+function archiveFmtDateTime(ts) {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleString(undefined,
+    { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function archiveFmtTime(ts) {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+function archiveFmtBucket(ts, seconds) {
+  return seconds >= 86400 ? archiveFmtDate(ts) : archiveFmtDateTime(ts);
+}
+function archiveFmtSize(n) {
+  if (n == null) return "—";
+  n = Number(n);
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+function archiveAuthorColor(id) {
+  let h = 0;
+  for (const ch of String(id || "?")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360}, 52%, 42%)`;
+}
+function archiveInitial(name) {
+  return String(name || "?").trim().slice(0, 1).toUpperCase() || "?";
+}
+function archiveEsc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function archiveEscapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function archiveFormatText(text, terms) {
+  let s = archiveEsc(text || "");
+  const safeTerms = (terms || []).filter((t) => String(t).trim()).map((t) => archiveEsc(t));
+  for (const term of safeTerms) {
+    s = s.replace(new RegExp(archiveEscapeRe(term), "gi"), (m) => `\u0001${m}\u0002`);
+  }
+  const blocks = [];
+  s = s.replace(/```([\s\S]*?)```/g, (_, code) => {
+    blocks.push(`<pre class="msg-code">${code.replace(/^\n|\n$/g, "")}</pre>`);
+    return `\u0003${blocks.length - 1}\u0004`;
+  });
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/\n/g, "<br>");
+  s = s.replace(/\u0001([\s\S]*?)\u0002/g, "<mark>$1</mark>");
+  s = s.replace(/\u0003(\d+)\u0004/g, (_, i) => blocks[Number(i)] || "");
+  return s;
+}
+function archiveLinkifyText(text) { return archiveFormatText(text, []); }
+
+function archiveQueryTerms(filter) {
+  const out = [];
+  if (!filter) return out;
+  if (filter.kind === "condition" &&
+      ["content", "search_text"].includes(filter.field) &&
+      ["contains", "starts_with", "ends_with", "equals"].includes(filter.op) &&
+      typeof filter.value === "string") out.push(filter.value);
+  for (const c of filter.children || []) out.push(...archiveQueryTerms(c));
+  return out;
+}
+
+function archiveConditionSqlSummary(node) {
+  if (!node) return "";
+  if (node.kind === "group" || node.children) {
+    const op = node.op || "AND";
+    const parts = (node.children || []).map(archiveConditionSqlSummary).filter(Boolean);
+    if (!parts.length) return "";
+    if (op === "NOT") return `NOT (${parts.join(" AND ")})`;
+    if (parts.length === 1) return parts[0];
+    return `(${parts.join(` ${op} `)})`;
+  }
+  const f = archiveField(node.field);
+  const op = ARCHIVE_OP_LABEL[node.op] || node.op;
+  if (ARCHIVE_NO_VALUE.has(node.op)) return `${f.label} ${op}`;
+  let val = node.value;
+  if (f.type === "date" && typeof val === "number") val = archiveFmtDateTime(val);
+  if (Array.isArray(val)) val = val.map((v) => f.type === "date" && typeof v === "number" ? archiveFmtDateTime(v) : v).join(" – ");
+  return `${f.label} ${op} ${val ?? ""}`.trim();
+}
+
+function archiveCleanFilter(node) {
+  if (!node) return null;
+  if (node.kind === "group" || node.children) {
+    const children = (node.children || []).map(archiveCleanFilter).filter(Boolean);
+    if (!children.length) return null;
+    return { kind: "group", op: node.op || "AND", children };
+  }
+  if (ARCHIVE_NO_VALUE.has(node.op)) return { ...node, value: undefined };
+  const spec = archiveField(node.field);
+  if (spec.type === "bool") return node;
+  if (node.value === undefined || node.value === null ||
+      (typeof node.value === "string" && !node.value.trim())) return null;
+  if (node.op === "between" && (!Array.isArray(node.value) || node.value.length !== 2 ||
+      node.value.some((v) => v === "" || v == null))) return null;
+  return node;
+}
+
+function archiveUpdateHash() {
+  if (!archiveState) return;
+  const q = new URLSearchParams();
+  if (archiveState.channelId && !archiveState.allChannels) q.set("channel", archiveState.channelId);
+  if (archiveState.anchorMessageId) q.set("around", archiveState.anchorMessageId);
+  if (archiveState.timeWindow) {
+    q.set("after", archiveState.timeWindow.after);
+    q.set("before", archiveState.timeWindow.before);
+  }
+  const target = "#/archive" + (q.toString() ? `?${q.toString()}` : "");
+  history.replaceState(null, "", target);
+}
+
+async function renderArchive(params) {
+  document.body.classList.add("archive-mode");
+  onCleanup(() => document.body.classList.remove("archive-mode"));
+  const p = params || new URLSearchParams((location.hash.split("?")[1] || ""));
+  if (!archiveState) archiveState = archiveNewState();
+  if (p.has("channel")) {
+    archiveState.channelId = p.get("channel") || null;
+    archiveState.allChannels = !archiveState.channelId;
+  }
+  archiveState.anchorMessageId = p.has("around") ? (p.get("around") || null) : null;
+  archiveState.newerCursor = null;
+  if (p.has("after") || p.has("before")) {
+    archiveState.timeWindow = {
+      after: Number(p.get("after") || 0),
+      before: Number(p.get("before") || 0),
+    };
+  } else {
+    archiveState.timeWindow = null;
+  }
+
+  if (!archiveState.stats) {
+    const [stats, guilds, channels, users] = await Promise.all([
+      api("GET", "api/archive/stats"),
+      api("GET", "api/archive/guilds"),
+      api("GET", "api/archive/channels"),
+      api("GET", "api/archive/users?limit=200"),
+    ]);
+    archiveState.stats = stats;
+    archiveState.guilds = guilds;
+    archiveState.channels = channels;
+    archiveState.users = users;
+    if (!archiveState.guildId && guilds.length) archiveState.guildId = guilds[0].id;
+    if (!archiveState.channelId && !archiveState.allChannels) {
+      const scoped = channels.filter((c) => !c.is_thread && c.message_count > 0);
+      const general = scoped.find((c) => c.name === "general") ||
+        scoped.find((c) => !c.is_thread) || scoped[0];
+      if (general) archiveState.channelId = general.id;
+    }
+  }
+
+  buildArchiveShell();
+  archiveUpdateHash();
+  refreshChannelList();
+  refreshBuilder();
+  if (archiveState.anchorMessageId) {
+    await Promise.all([loadArchiveContext(archiveState.anchorMessageId), refreshHeatmap()]);
+  } else {
+    await Promise.all([refreshMessages(true), refreshHeatmap()]);
+  }
+}
+
+function buildArchiveShell() {
+  const stats = archiveState.stats || {};
+  const statsCard = h("div", { class: "card archive-stats-card" },
+    h("h2", null, "Archive"),
+    h("div", { class: "archive-stat-grid" },
+      h("div", null, h("b", null, (stats.messages || 0).toLocaleString()), h("span", null, " messages")),
+      h("div", null, h("b", null, (stats.channels || 0).toLocaleString()), h("span", null, " channels")),
+      h("div", null, h("b", null, (stats.threads || 0).toLocaleString()), h("span", null, " threads")),
+      h("div", null, h("b", null, (stats.users || 0).toLocaleString()), h("span", null, " people")),
+      h("div", null, h("b", null, (stats.attachments || 0).toLocaleString()), h("span", null, " files")),
+    ),
+    h("p", { class: "hint" },
+      `${archiveFmtDate(stats.oldest_ts)} → ${archiveFmtDate(stats.newest_ts)} · ${archiveFmtSize(stats.blob_bytes)} archived`),
+  );
+
+  const channelSearch = h("input", {
+    class: "archive-channel-search", placeholder: archiveT("archive_filter_channels", "Filter channels…"),
+    value: archiveState.channelQuery,
+    oninput: (e) => { archiveState.channelQuery = e.target.value; refreshChannelList(); },
+  });
+  const channelList = h("div", { class: "archive-channel-list" });
+  const guildSelect = h("select", {
+    class: "archive-guild-select",
+    onchange: (e) => {
+      archiveState.guildId = e.target.value || null;
+      archiveState.channelId = null;
+      archiveState.allChannels = false;
+      refreshChannelList(); refreshMessages(true); refreshHeatmap();
+    },
+  }, archiveState.guilds.map((g) => h("option", { value: g.id, selected: g.id === archiveState.guildId ? "" : null }, g.name || g.id)));
+
+  const channelPane = h("aside", { class: "archive-channel-pane" },
+    h("div", { class: "archive-guild" },
+      h("div", { class: "archive-guild-name" }, guildSelect),
+      h("div", { class: "hint" }, "Browse by channel or thread")),
+    channelSearch, channelList,
+  );
+
+  const msgHeader = h("div", { class: "archive-msg-head" });
+  const msgList = h("div", { class: "archive-msgs" });
+  const messagePane = h("section", { class: "archive-message-pane" }, msgHeader, msgList);
+
+  const queryCard = h("div", { class: "card archive-query-card" },
+    h("h2", null, archiveT("archive_query", "Query builder")),
+    (() => {
+      const input = h("input", {
+        class: "archive-quick-search", placeholder: archiveT("archive_search_placeholder", "Search messages…"),
+        value: archiveState.quickSearch,
+        oninput: (e) => { archiveState.quickSearch = e.target.value; },
+        onkeydown: (e) => { if (e.key === "Enter") runArchiveQuickSearch(); },
+      });
+      return h("div", { class: "archive-quick-row" }, input,
+        h("button", { onclick: runArchiveQuickSearch }, archiveT("archive_search", "Search")));
+    })(),
+    h("div", { class: "archive-builder" }),
+    h("div", { class: "archive-query-actions" },
+      h("label", { class: "archive-check" },
+        (() => { const cb = h("input", { type: "checkbox" }); cb.checked = archiveState.includeBots; cb.onchange = () => { archiveState.includeBots = cb.checked; }; return cb; })(),
+        " include bots"),
+      h("select", {
+        onchange: (e) => { archiveState.queryOrder = e.target.value; },
+      }, h("option", { value: "desc", selected: archiveState.queryOrder === "desc" ? "" : null }, "newest first"),
+         h("option", { value: "asc", selected: archiveState.queryOrder === "asc" ? "" : null }, "oldest first")),
+      h("span", { class: "spacer" }),
+      h("button", { class: "secondary small", onclick: resetArchiveBuilder }, "Reset"),
+      h("button", { onclick: runArchiveQuery }, archiveT("archive_run", "Run query")),
+    ),
+    h("pre", { class: "archive-query-preview" }),
+  );
+
+  const heatCard = h("div", { class: "card archive-heat-card" },
+    h("h2", null, archiveT("archive_heatmap", "Activity heatmap")),
+    h("p", { class: "hint" }, archiveT("archive_heat_hint", "Click a cell or hot moment to jump to that time.")),
+    h("div", { class: "archive-heat-controls" },
+      (() => {
+        const s = h("select", { onchange: (e) => { archiveState.heat.bucket = e.target.value; refreshHeatmap(); } },
+          h("option", { value: "hour", selected: archiveState.heat.bucket === "hour" ? "" : null }, "hourly"),
+          h("option", { value: "day", selected: archiveState.heat.bucket === "day" ? "" : null }, "daily"));
+        return s;
+      })(),
+      (() => {
+        const s = h("select", { onchange: (e) => { archiveState.heat.days = Number(e.target.value); refreshHeatmap(); } });
+        for (const [v, label] of [[7, "last 7 days"], [30, "last 30 days"], [90, "last 90 days"], [365, "last year"], [0, "all time"]]) {
+          const o = h("option", { value: v }, label); if (archiveState.heat.days === v) o.selected = true; s.append(o);
+        }
+        return s;
+      })(),
+      (() => {
+        const s = h("select", { onchange: (e) => { archiveState.heat.metric = e.target.value; refreshHeatmap(); } });
+        for (const [v, label] of [["heat", "heat"], ["messages", "messages"], ["authors", "people"]]) {
+          const o = h("option", { value: v }, label); if (archiveState.heat.metric === v) o.selected = true; s.append(o);
+        }
+        return s;
+      })(),
+      h("span", { class: "spacer" }),
+      h("button", { class: "secondary small", title: "smaller cells", onclick: () => { archiveState.heat.cell = Math.max(5, archiveState.heat.cell - 2); refreshHeatmap(); } }, "−"),
+      h("button", { class: "secondary small", title: "larger cells", onclick: () => { archiveState.heat.cell = Math.min(20, archiveState.heat.cell + 2); refreshHeatmap(); } }, "+"),
+    ),
+    h("div", { class: "archive-heat-body" }),
+  );
+
+  const queryPane = h("aside", { class: "archive-query-pane" }, statsCard, queryCard, heatCard);
+  const shell = h("div", { class: "archive-shell" },
+    h("section", { class: "archive-browser" }, channelPane, messagePane),
+    queryPane,
+    h("div", { class: "archive-mobile-tabs" },
+      h("button", { onclick: () => { shell.classList.remove("show-query"); shell.classList.add("show-browser"); } }, "Browser"),
+      h("button", { onclick: () => { shell.classList.add("show-query"); shell.classList.remove("show-browser"); } }, "Query & heatmap"),
+    ),
+  );
+  shell.classList.add("show-browser");
+  archiveUi = { shell, msgHeader, msgList, channelList, queryCard, heatCard, queryPane };
+  $view().replaceChildren(shell);
+}
+
+function refreshChannelList() {
+  if (!archiveUi.channelList) return;
+  const q = archiveState.channelQuery.trim().toLowerCase();
+  const channels = archiveState.channels.filter((c) => c.guild_id === archiveState.guildId);
+  const visible = (c) => !q || String(c.name || "").toLowerCase().includes(q) || String(c.id).includes(q);
+  const cats = channels.filter((c) => c.type === 4).sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
+  const catIds = new Set(cats.map((c) => c.id));
+  const top = channels.filter((c) => !c.is_thread && c.type !== 4);
+  const threads = channels.filter((c) => c.is_thread);
+  const byParent = {};
+  for (const t of threads) (byParent[t.parent_id] ||= []).push(t);
+
+  function row(c, depth) {
+    const active = !archiveState.allChannels && archiveState.channelId === c.id;
+    const icon = c.type === 2 ? "🔊" : c.type === 5 ? "📢" : c.type === 15 ? "🗂" : c.is_thread ? "🧵" : "#";
+    const hasThreads = (byParent[c.id] || []).length > 0;
+    const open = archiveState.threadOpen.has(c.id);
+    const r = h("div", {
+      class: `archive-channel-row${active ? " active" : ""}`, style: `padding-left:${8 + depth * 14}px`,
+      onclick: () => {
+        archiveState.channelId = c.id; archiveState.allChannels = false;
+        archiveState.resultMode = "browse"; archiveState.activeFilter = null; archiveState.timeWindow = null;
+        archiveState.anchorMessageId = null; archiveState.newerCursor = null;
+        archiveUpdateHash(); refreshChannelList(); refreshMessages(true); refreshHeatmap();
+      },
+      title: `${c.name || c.id} · ${c.message_count || 0} messages`,
+    },
+      h("span", { class: "archive-ch-icon" }, icon),
+      h("span", { class: "archive-ch-name" }, c.name || c.id),
+      c.message_count ? h("span", { class: "archive-ch-count" }, c.message_count) : null,
+      hasThreads ? h("button", {
+        class: "archive-thread-toggle", title: "toggle threads",
+        onclick: (e) => {
+          e.stopPropagation();
+          if (open) archiveState.threadOpen.delete(c.id); else archiveState.threadOpen.add(c.id);
+          refreshChannelList();
+        },
+      }, `${open ? "▾" : "▸"}${byParent[c.id].length}`) : null,
+    );
+    return r;
+  }
+
+  const children = [];
+  children.push(h("div", {
+    class: `archive-channel-row archive-all-channels${archiveState.allChannels ? " active" : ""}`,
+    onclick: () => {
+      archiveState.channelId = null; archiveState.allChannels = true;
+      archiveState.resultMode = "browse"; archiveState.activeFilter = null; archiveState.timeWindow = null;
+      archiveState.anchorMessageId = null; archiveState.newerCursor = null;
+      archiveUpdateHash(); refreshChannelList(); refreshMessages(true); refreshHeatmap();
+    },
+  }, h("span", { class: "archive-ch-icon" }, "🌐"), h("span", { class: "archive-ch-name" }, "All channels")));
+
+  const groups = cats.map((cat) => ({ cat, chans: top.filter((c) => c.parent_id === cat.id) }))
+    .filter((g) => g.chans.some(visible) || threads.some((t) => visible(t) && g.chans.some((c) => c.id === t.parent_id)));
+  const orphan = top.filter((c) => !c.parent_id || !catIds.has(c.parent_id));
+  for (const { cat, chans } of groups) {
+    children.push(h("div", { class: "archive-channel-cat" }, cat.name || "Channels"));
+    for (const c of chans.filter(visible)) {
+      children.push(row(c, 0));
+      if (archiveState.threadOpen.has(c.id)) {
+        for (const t of (byParent[c.id] || []).filter(visible)) children.push(row(t, 1));
+      }
+    }
+  }
+  if (orphan.filter(visible).length) {
+    children.push(h("div", { class: "archive-channel-cat" }, "Other"));
+    for (const c of orphan.filter(visible)) {
+      children.push(row(c, 0));
+      if (archiveState.threadOpen.has(c.id)) {
+        for (const t of (byParent[c.id] || []).filter(visible)) children.push(row(t, 1));
+      }
+    }
+  }
+  if (!children.length) children.push(h("p", { class: "hint" }, "No matching channels."));
+  archiveUi.channelList.replaceChildren(...children);
+}
+
+function refreshMessageHeader() {
+  if (!archiveUi.msgHeader) return;
+  const st = archiveState;
+  const channel = st.channels.find((c) => c.id === st.channelId);
+  let title, sub;
+  if (st.resultMode === "query") {
+    title = "Query results";
+    sub = `${st.total == null ? "…" : st.total.toLocaleString()} matching messages`;
+  } else if (st.allChannels || !channel) {
+    title = "All channels";
+    sub = `${st.total == null ? "…" : st.total.toLocaleString()} messages`;
+  } else {
+    title = `${channel.is_thread ? "🧵" : "#"} ${channel.name || channel.id}`;
+    sub = `${st.total == null ? "…" : st.total.toLocaleString()} messages archived`;
+  }
+  const chips = [];
+  if (st.resultMode === "query") {
+    const summary = archiveConditionSqlSummary(st.activeFilter);
+    if (summary) chips.push(h("span", { class: "archive-chip", title: summary }, summary));
+  }
+  if (st.timeWindow) {
+    chips.push(h("span", { class: "archive-chip archive-chip-time" },
+      `${archiveFmtDateTime(st.timeWindow.after)} → ${archiveFmtDateTime(st.timeWindow.before)} `,
+      h("button", { class: "archive-chip-x", title: "clear time filter", onclick: () => {
+        st.timeWindow = null; st.anchorMessageId = null; st.newerCursor = null;
+        archiveUpdateHash(); refreshMessages(true);
+      } }, "×")));
+  }
+  const headNodes = [
+    h("div", { class: "archive-msg-head-main" },
+      h("div", null, h("h2", null, title), h("div", { class: "hint" }, sub)),
+      h("div", { class: "archive-msg-tools" },
+        h("button", { class: "secondary small", onclick: () => {
+          if (st.anchorMessageId) loadArchiveContext(st.anchorMessageId);
+          else refreshMessages(true);
+        } }, "↻ refresh"),
+        st.resultMode === "query" || st.timeWindow || st.anchorMessageId
+          ? h("button", { class: "secondary small", onclick: () => {
+              st.resultMode = "browse"; st.activeFilter = null; st.timeWindow = null;
+              st.anchorMessageId = null; st.newerCursor = null;
+              archiveUpdateHash(); refreshMessages(true);
+            } }, "latest")
+          : null,
+      ),
+    ),
+  ];
+  if (chips.length) headNodes.push(h("div", { class: "archive-chips" }, chips));
+  archiveUi.msgHeader.replaceChildren(...headNodes);
+}
+
+async function refreshMessages(reset) {
+  if (!archiveUi.msgList) return;
+  const st = archiveState;
+  if (reset) {
+    st.messages = []; st.cursor = null; st.newerCursor = null;
+    st.total = null; st.loading = true;
+    archiveUi.msgList.replaceChildren(h("div", { class: "archive-loading" }, "loading messages…"));
+    refreshMessageHeader();
+  } else if (st.loadingMore) return;
+  else { st.loadingMore = true; }
+  try {
+    let res;
+    if (st.resultMode === "query") {
+      res = await api("POST", "api/archive/query", {
+        filter: st.activeFilter, guild_id: st.guildId,
+        channel_id: st.allChannels ? null : st.channelId,
+        before: st.timeWindow ? st.timeWindow.before : null,
+        after: st.timeWindow ? st.timeWindow.after : null,
+        limit: 50, cursor: reset ? null : st.cursor,
+        order: st.queryOrder, include_bots: st.includeBots,
+      });
+    } else {
+      const q = new URLSearchParams({ limit: "50", order: "desc", include_bots: String(st.includeBots) });
+      if (st.channelId && !st.allChannels) q.set("channel_id", st.channelId);
+      if (st.guildId) q.set("guild_id", st.guildId);
+      if (st.timeWindow) { q.set("after", st.timeWindow.after); q.set("before", st.timeWindow.before); }
+      if (!reset && st.cursor) q.set("cursor", st.cursor);
+      res = await api("GET", `api/archive/messages?${q.toString()}`);
+    }
+    st.messages = reset ? res.items : st.messages.concat(res.items);
+    st.cursor = res.next_cursor;
+    st.total = res.total;
+  } catch (e) {
+    st.loading = false; st.loadingMore = false;
+    archiveUi.msgList.replaceChildren(h("div", { class: "card result-err" }, e.message));
+    return;
+  }
+  st.loading = false; st.loadingMore = false;
+  renderMessageList(reset);
+  refreshMessageHeader();
+}
+
+async function jumpToOriginalMessage(m) {
+  const st = archiveState;
+  st.guildId = m.guild_id || st.guildId;
+  st.channelId = m.channel_id;
+  st.allChannels = false;
+  st.resultMode = "browse";
+  st.activeFilter = null;
+  st.timeWindow = null;
+  st.anchorMessageId = String(m.id);
+  st.newerCursor = null;
+  resetArchiveBuilder();
+  archiveUpdateHash();
+  refreshChannelList();
+  await loadArchiveContext(m.id);
+}
+
+async function loadArchiveContext(messageId) {
+  if (!archiveUi.msgList) return;
+  const st = archiveState;
+  st.loading = true;
+  st.messages = [];
+  st.cursor = null;
+  st.newerCursor = null;
+  st.anchorMessageId = String(messageId);
+  archiveUi.msgList.replaceChildren(h("div", { class: "archive-loading" }, "loading message context…"));
+  refreshMessageHeader();
+  try {
+    const q = new URLSearchParams({ message_id: messageId, before: "50", after: "50" });
+    if (st.channelId) q.set("channel_id", st.channelId);
+    const res = await api("GET", `api/archive/context?${q.toString()}`);
+    const asc = res.items || [];
+    st.messages = asc.slice().reverse();
+    const oldest = asc[0];
+    const newest = asc[asc.length - 1];
+    st.cursor = res.has_older && oldest ? `${oldest.created_ts}:${oldest.id}` : null;
+    st.newerCursor = res.has_newer && newest ? `${newest.created_ts}:${newest.id}` : null;
+    const channel = st.channels.find((c) => c.id === st.channelId);
+    st.total = channel ? channel.message_count : null;
+  } catch (e) {
+    st.loading = false;
+    archiveUi.msgList.replaceChildren(h("div", { class: "card result-err" }, e.message));
+    return;
+  }
+  st.loading = false;
+  renderMessageList(true);
+  refreshMessageHeader();
+}
+
+async function loadOlderMessages() {
+  if (!archiveUi.msgList || archiveState.loadingMore) return;
+  const before = Array.from(archiveUi.msgList.querySelectorAll(".msg-row[data-mid]"))
+    .find((el) => el.offsetTop + el.offsetHeight > archiveUi.msgList.scrollTop);
+  const offset = before ? before.offsetTop - archiveUi.msgList.scrollTop : 0;
+  const mid = before ? before.dataset.mid : null;
+  await refreshMessages(false);
+  if (!mid) return;
+  const after = Array.from(archiveUi.msgList.querySelectorAll(".msg-row[data-mid]"))
+    .find((el) => el.dataset.mid === mid);
+  if (after) archiveUi.msgList.scrollTop = after.offsetTop - offset;
+}
+
+async function loadNewerMessages() {
+  if (!archiveUi.msgList || archiveState.loadingMore || !archiveState.newerCursor) return;
+  const st = archiveState;
+  st.loadingMore = true;
+  try {
+    const q = new URLSearchParams({
+      limit: "50", order: "asc", include_bots: String(st.includeBots),
+      cursor: st.newerCursor,
+    });
+    if (st.channelId && !st.allChannels) q.set("channel_id", st.channelId);
+    if (st.guildId) q.set("guild_id", st.guildId);
+    const res = await api("GET", `api/archive/messages?${q.toString()}`);
+    st.messages = (res.items || []).slice().reverse().concat(st.messages);
+    st.newerCursor = res.next_cursor;
+  } catch (e) {
+    st.loadingMore = false;
+    toast(e.message, "error");
+    return;
+  }
+  st.loadingMore = false;
+  const top = archiveUi.msgList.scrollTop;
+  renderMessageList(false);
+  archiveUi.msgList.scrollTop = top;
+  refreshMessageHeader();
+}
+
+function renderMessageList(reset) {
+  if (!archiveUi.msgList) return;
+  const st = archiveState;
+  const terms = st.resultMode === "query" ? archiveQueryTerms(st.activeFilter) : [];
+  const chronological = st.resultMode !== "query";
+  const items = chronological ? st.messages.slice().reverse() : st.messages.slice();
+  const nodes = [];
+  if (st.cursor) {
+    nodes.push(h("div", { class: "archive-load-more" },
+      h("button", { class: "secondary small", onclick: async () => {
+        if (chronological) await loadOlderMessages();
+        else await refreshMessages(false);
+      } }, chronological ? "↑ load older messages" : "↓ load more results")));
+  }
+  let prev = null;
+  let prevDate = null;
+  for (const m of items) {
+    const day = new Date((m.created_ts || 0) * 1000).toDateString();
+    if (day !== prevDate) {
+      nodes.push(h("div", { class: "archive-date-sep" }, archiveFmtDate(m.created_ts)));
+      prevDate = day; prev = null;
+    }
+    const same = prev && prev.author && m.author && prev.author.id === m.author.id &&
+      Math.abs((m.created_ts || 0) - (prev.created_ts || 0)) < 7 * 60 &&
+      !m.reply_to && !(m.attachments || []).length;
+    nodes.push(archiveMessageRow(m, same, terms));
+    prev = m;
+  }
+  if (!items.length) nodes.push(h("div", { class: "archive-empty" }, "No messages found."));
+  if (chronological && st.newerCursor) {
+    nodes.push(h("div", { class: "archive-load-more" },
+      h("button", { class: "secondary small", onclick: loadNewerMessages },
+        "↓ load newer messages")));
+  }
+  archiveUi.msgList.replaceChildren(...nodes);
+  if (reset) {
+    requestAnimationFrame(() => {
+      if (st.anchorMessageId) {
+        const anchor = Array.from(archiveUi.msgList.querySelectorAll(".msg-row[data-mid]"))
+          .find((el) => el.dataset.mid === String(st.anchorMessageId));
+        if (anchor) {
+          archiveUi.msgList.scrollTop = Math.max(0, anchor.offsetTop -
+            archiveUi.msgList.clientHeight / 2 + anchor.offsetHeight / 2);
+          return;
+        }
+      }
+      if (chronological) archiveUi.msgList.scrollTop = archiveUi.msgList.scrollHeight;
+      else archiveUi.msgList.scrollTop = 0;
+    });
+  }
+}
+
+function archiveMessageRow(m, grouped, terms) {
+  const author = m.author || {};
+  const name = author.display_name || author.name || "unknown";
+  const avatar = h("div", { class: "msg-avatar", style: `background:${archiveAuthorColor(author.id)}` }, archiveInitial(name));
+  const header = grouped ? null : h("div", { class: "msg-headline" },
+    h("span", { class: "msg-author", title: `user id ${author.id || "?"}` }, name),
+    author.is_bot ? badge("bot", "muted") : null,
+    h("span", { class: "msg-time", title: archiveFmtDateTime(m.created_ts) }, archiveFmtTime(m.created_ts)),
+    m.edited_ts ? h("span", { class: "msg-edited" }, "(edited)") : null,
+    m.pinned ? h("span", { class: "msg-pin", title: "pinned" }, "📌") : null,
+    h("button", {
+      class: "msg-jump msg-jump-original", title: "jump to original message",
+      onclick: (e) => { e.stopPropagation(); jumpToOriginalMessage(m); },
+    }, "↩"),
+    m.guild_id && m.channel_id
+      ? h("a", { class: "msg-jump", href: `https://discord.com/channels/${m.guild_id}/${m.channel_id}/${m.id}`, target: "_blank", rel: "noopener", title: "open in Discord" }, "↗")
+      : null,
+  );
+  const body = h("div", { class: "msg-body" });
+  if (header) body.append(header);
+  if (archiveState.allChannels || archiveState.resultMode === "query") {
+    body.append(h("div", { class: "msg-channel" }, `# ${m.channel_name || m.channel_id}`));
+  }
+  if (m.reply_to) {
+    body.append(h("div", { class: "reply-preview" },
+      h("span", { class: "dim" }, `↪ ${m.reply_to.author_name || "unknown"}: `),
+      h("span", { html: archiveFormatText(m.reply_to.content || "(no text)", terms) })));
+  }
+  if (m.content) body.append(h("div", { class: "msg-content", html: archiveFormatText(m.content, terms) }));
+  const atts = m.attachments || [];
+  if (atts.length) {
+    const grid = h("div", { class: "msg-attach-grid" });
+    for (const a of atts) {
+      const href = `api/archive/attachments/${encodeURIComponent(a.id)}`;
+      const isImg = a.available && String(a.content_type || "").startsWith("image/");
+      if (isImg) {
+        grid.append(h("a", { class: "msg-image-link", href: `${href}?download=1`, target: "_blank", rel: "noopener", title: a.filename || "" },
+          h("img", { class: "msg-image", src: href, loading: "lazy", alt: a.filename || "attachment" })));
+      } else {
+        grid.append(a.available
+          ? h("a", { class: "file-chip", href: `${href}?download=1`, target: "_blank", rel: "noopener", title: a.filename || "" },
+              "📎 ", h("span", null, a.filename || "file"), h("span", { class: "dim" }, ` ${archiveFmtSize(a.size_bytes)}`))
+          : h("span", { class: "file-chip", title: "bytes are not available in the archive" },
+              "📎 ", h("span", null, a.filename || "file"), badge("not archived", "yellow")));
+      }
+    }
+    body.append(grid);
+  }
+  for (const e of m.embeds || []) {
+    const card = archiveEmbedCard(e);
+    if (card) body.append(card);
+  }
+  const isAnchor = String(m.id) === String(archiveState.anchorMessageId);
+  return h("div", { class: `msg-row${grouped ? " grouped" : ""}${m.pinned ? " pinned" : ""}${isAnchor ? " anchor" : ""}`,
+    "data-mid": m.id }, avatar, body);
+}
+
+function archiveEmbedCard(e) {
+  if (!e || (!e.title && !e.description && !e.image && !e.thumbnail)) return null;
+  const color = typeof e.color === "number" ? `#${e.color.toString(16).padStart(6, "0")}` : null;
+  const card = h("div", { class: "embed-card", style: color ? `border-left-color:${color}` : null });
+  if (e.author && e.author.name) card.append(h("div", { class: "embed-author" },
+    e.author.icon_url ? h("img", { src: e.author.icon_url, alt: "" }) : null,
+    e.author.url ? h("a", { href: e.author.url, target: "_blank", rel: "noopener" }, e.author.name) : e.author.name));
+  if (e.title) card.append(h("div", { class: "embed-title" },
+    e.url ? h("a", { href: e.url, target: "_blank", rel: "noopener" }, e.title) : e.title));
+  if (e.description) card.append(h("div", { class: "embed-desc", html: archiveLinkifyText(e.description) }));
+  if ((e.fields || []).length) card.append(h("div", { class: "embed-fields" },
+    e.fields.map((f) => h("div", { class: "embed-field" },
+      h("div", { class: "fname" }, f.name || ""),
+      h("div", { class: "fvalue", html: archiveLinkifyText(f.value || "") })))));
+  if (e.image && e.image.url) card.append(h("img", { class: "embed-image", src: e.image.url, loading: "lazy", alt: "" }));
+  if (e.footer && e.footer.text) card.append(h("div", { class: "embed-footer" },
+    e.footer.icon_url ? h("img", { src: e.footer.icon_url, alt: "" }) : null, e.footer.text));
+  return card;
+}
+
+function refreshBuilder() {
+  if (!archiveUi.queryCard) return;
+  const wrap = archiveUi.queryCard.querySelector(".archive-builder");
+  const preview = archiveUi.queryCard.querySelector(".archive-query-preview");
+  if (!wrap) return;
+  wrap.replaceChildren(archiveBuildGroup(archiveState.builder, null));
+  if (preview) {
+    const clean = archiveCleanFilter(archiveState.builder);
+    preview.textContent = clean ? archiveConditionSqlSummary(clean) : "(no conditions — browse mode)";
+  }
+}
+
+function archiveNewCondition() { return { kind: "condition", field: "content", op: "contains", value: "" }; }
+
+function archiveBuildGroup(node, parent) {
+  const group = h("div", { class: `qb-group${parent ? " qb-nested" : ""}` });
+  const opSel = h("select", {
+    class: "qb-group-op",
+    onchange: (e) => { node.op = e.target.value; refreshBuilder(); },
+  }, h("option", { value: "AND", selected: node.op === "AND" ? "" : null }, "ALL (AND)"),
+     h("option", { value: "OR", selected: node.op === "OR" ? "" : null }, "ANY (OR)"),
+     h("option", { value: "NOT", selected: node.op === "NOT" ? "" : null }, "NOT"));
+  const head = h("div", { class: "qb-group-head" }, opSel,
+    h("button", { class: "secondary small", onclick: () => { node.children.push(archiveNewCondition()); refreshBuilder(); } }, "+ condition"),
+    h("button", { class: "secondary small", onclick: () => { node.children.push({ kind: "group", op: "AND", children: [archiveNewCondition()] }); refreshBuilder(); } }, "+ group"),
+    parent ? h("button", { class: "secondary small danger-text", title: "remove group", onclick: () => {
+      const i = parent.children.indexOf(node); if (i >= 0) parent.children.splice(i, 1); refreshBuilder();
+    } }, "×") : null);
+  group.append(head);
+  for (const child of node.children) {
+    group.append(child.kind === "group" || child.children
+      ? archiveBuildGroup(child, node)
+      : archiveBuildCondition(child, node));
+  }
+  return group;
+}
+
+function archiveBuildCondition(node, parent) {
+  const spec = archiveField(node.field);
+  const row = h("div", { class: "qb-row" });
+  const fieldSel = h("select", { class: "qb-field", onchange: (e) => {
+    node.field = e.target.value;
+    const ns = archiveField(node.field);
+    node.op = ARCHIVE_OPS[ns.type][0];
+    node.value = ns.type === "bool" ? undefined : "";
+    refreshBuilder();
+  } }, ARCHIVE_FIELDS.map((f) => h("option", { value: f.id, selected: f.id === node.field ? "" : null }, f.label)));
+  const ops = ARCHIVE_OPS[spec.type] || ARCHIVE_OPS.text;
+  if (!ops.includes(node.op)) node.op = ops[0];
+  const opSel = h("select", { class: "qb-op", onchange: (e) => {
+    node.op = e.target.value;
+    if (ARCHIVE_NO_VALUE.has(node.op)) {
+      node.value = undefined;
+    } else if (node.op === "between") {
+      if (!Array.isArray(node.value)) node.value = [node.value ?? "", ""];
+    } else if (Array.isArray(node.value)) {
+      node.value = node.value[0] ?? "";
+    } else if (node.value === undefined) {
+      node.value = "";
+    }
+    refreshBuilder();
+  } }, ops.map((op) => h("option", { value: op, selected: op === node.op ? "" : null }, ARCHIVE_OP_LABEL[op] || op)));
+  const valueWrap = h("span", { class: "qb-value" }, archiveValueControl(node, spec));
+  row.append(fieldSel, opSel, valueWrap,
+    h("button", { class: "secondary small danger-text", title: "remove condition", onclick: () => {
+      const i = parent.children.indexOf(node); if (i >= 0) parent.children.splice(i, 1);
+      if (!parent.children.length) parent.children.push(archiveNewCondition());
+      refreshBuilder();
+    } }, "×"));
+  return row;
+}
+
+function archiveValueControl(node, spec) {
+  if (ARCHIVE_NO_VALUE.has(node.op)) return h("span", { class: "hint" }, "—");
+  if (spec.type === "date") {
+    const fromTs = (v) => {
+      if (v == null || v === "") return "";
+      const d = new Date(Number(v) * 1000 - new Date(Number(v) * 1000).getTimezoneOffset() * 60000);
+      return d.toISOString().slice(0, 16);
+    };
+    const toTs = (v) => v ? new Date(v).getTime() / 1000 : "";
+    if (node.op === "between") {
+      const vals = Array.isArray(node.value) ? node.value : ["", ""];
+      const a = h("input", { type: "datetime-local", value: fromTs(vals[0]), onchange: (e) => {
+        node.value = [toTs(e.target.value), node.value && node.value[1] || ""];
+      } });
+      const b = h("input", { type: "datetime-local", value: fromTs(vals[1]), onchange: (e) => {
+        node.value = [node.value && node.value[0] || "", toTs(e.target.value)];
+      } });
+      return h("span", { class: "qb-between" }, a, h("span", { class: "dim" }, "→"), b);
+    }
+    return h("input", { type: "datetime-local", value: fromTs(node.value), onchange: (e) => { node.value = toTs(e.target.value); } });
+  }
+  if (spec.type === "bool") return h("span", { class: "hint" }, "—");
+  if (node.op === "between") {
+    const vals = Array.isArray(node.value) ? node.value : ["", ""];
+    const a = h("input", { type: spec.type === "number" ? "number" : "text", value: vals[0] ?? "", placeholder: "from", onchange: (e) => {
+      node.value = [e.target.value, node.value && node.value[1] || ""];
+    } });
+    const b = h("input", { type: spec.type === "number" ? "number" : "text", value: vals[1] ?? "", placeholder: "to", onchange: (e) => {
+      node.value = [node.value && node.value[0] || "", e.target.value];
+    } });
+    return h("span", { class: "qb-between" }, a, h("span", { class: "dim" }, "→"), b);
+  }
+  if (node.field === "author_id") {
+    const sel = h("select", { onchange: (e) => { node.value = e.target.value; } },
+      h("option", { value: "" }, "any author"),
+      archiveState.users.map((u) => h("option", { value: u.id, selected: String(u.id) === String(node.value) ? "" : null },
+        `${u.display_name || u.name || u.id} (${u.message_count})`)));
+    return sel;
+  }
+  if (node.field === "channel_id") {
+    return h("select", { onchange: (e) => { node.value = e.target.value; } },
+      h("option", { value: "" }, "any channel"),
+      archiveState.channels.map((c) => h("option", { value: c.id, selected: String(c.id) === String(node.value) ? "" : null },
+        `${c.is_thread ? "🧵 " : "# "}${c.name || c.id}`)));
+  }
+  if (node.field === "guild_id") {
+    return h("select", { onchange: (e) => { node.value = e.target.value; } },
+      h("option", { value: "" }, "any server"),
+      archiveState.guilds.map((g) => h("option", { value: g.id, selected: String(g.id) === String(node.value) ? "" : null }, g.name || g.id)));
+  }
+  return h("input", {
+    type: spec.type === "number" ? "number" : "text",
+    value: node.value ?? "",
+    placeholder: spec.type === "number" ? "number" : spec.type === "id" ? "ID" : "value",
+    oninput: (e) => { node.value = e.target.value; },
+  });
+}
+
+function resetArchiveBuilder() {
+  archiveState.builder = { kind: "group", op: "AND", children: [archiveNewCondition()] };
+  archiveState.quickSearch = "";
+  const input = archiveUi.queryCard && archiveUi.queryCard.querySelector(".archive-quick-search");
+  if (input) input.value = "";
+  refreshBuilder();
+}
+
+function runArchiveQuickSearch() {
+  const q = (archiveState.quickSearch || "").trim();
+  if (!q) { resetArchiveBuilder(); return; }
+  const terms = q.split(/\s+/).filter(Boolean);
+  archiveState.builder = { kind: "group", op: "AND", children: terms.map((term) => ({
+    kind: "condition", field: "search_text", op: "contains", value: term,
+  })) };
+  refreshBuilder();
+  runArchiveQuery();
+}
+
+async function runArchiveQuery() {
+  const clean = archiveCleanFilter(archiveState.builder);
+  archiveState.activeFilter = clean;
+  archiveState.resultMode = "query";
+  archiveState.timeWindow = null;
+  archiveState.anchorMessageId = null;
+  archiveState.newerCursor = null;
+  archiveUpdateHash();
+  await refreshMessages(true);
+}
+
+async function refreshHeatmap() {
+  if (!archiveUi.heatCard) return;
+  const body = archiveUi.heatCard.querySelector(".archive-heat-body");
+  if (!body) return;
+  const st = archiveState;
+  st.heat.loading = true;
+  body.replaceChildren(h("div", { class: "archive-loading" }, "loading heatmap…"));
+  const stats = st.stats || {};
+  const now = Date.now() / 1000;
+  const before = Math.max(now, stats.newest_ts || 0);
+  const after = st.heat.days > 0 ? before - st.heat.days * 86400 : (stats.oldest_ts || 0);
+  const q = new URLSearchParams({
+    after: String(after), before: String(before),
+    bucket: st.heat.bucket, tz_offset: String(archiveTzOffset()),
+    include_bots: String(st.includeBots),
+  });
+  if (st.guildId) q.set("guild_id", st.guildId);
+  if (st.channelId && !st.allChannels) q.set("channel_id", st.channelId);
+  const req = Symbol();
+  st.heat.req = req;
+  try {
+    const data = await api("GET", `api/archive/heatmap?${q.toString()}`);
+    if (st.heat.req !== req) return;
+    st.heat.data = data;
+    st.heat.loading = false;
+    renderHeatmapBody(body, data, after, before);
+  } catch (e) {
+    st.heat.loading = false;
+    body.replaceChildren(h("div", { class: "result-err" }, e.message));
+  }
+}
+
+function archiveHeatValue(item, metric) {
+  if (!item) return 0;
+  if (metric === "messages") return item.messages;
+  if (metric === "authors") return item.authors;
+  return item.heat;
+}
+
+function archiveHeatColor(v, scale) {
+  if (!v) return "#25262b";
+  const t = Math.max(0, Math.min(1, scale <= 0 ? 0 : Math.log1p(v) / Math.log1p(scale)));
+  return `hsl(${Math.round(220 - 220 * t)}, ${Math.round(45 + 30 * t)}%, ${Math.round(18 + 28 * t)}%)`;
+}
+
+function archiveHeatScale(items, metric) {
+  const values = items.map((x) => archiveHeatValue(x, metric)).filter((v) => v > 0).sort((a, b) => a - b);
+  if (!values.length) return 1;
+  const idx = Math.min(values.length - 1, Math.floor(values.length * 0.94));
+  return Math.max(1, values[idx]);
+}
+
+function renderHeatmapBody(body, data, after, before) {
+  const st = archiveState;
+  const items = data.items || [];
+  const metric = st.heat.metric;
+  const scale = archiveHeatScale(items, metric);
+  const byBucket = new Map(items.map((x) => [x.bucket_start, x]));
+  const cell = st.heat.cell;
+  const seconds = data.bucket_seconds;
+  const nodes = [];
+  if (seconds >= 86400) {
+    const start = archiveLocalBucket(after, 86400);
+    const end = archiveLocalBucket(before, 86400);
+    const days = [];
+    for (let ts = start; ts <= end; ts += 86400) days.push(ts);
+    const grid = h("div", { class: "archive-heat-daygrid", style: `grid-template-columns:repeat(${days.length},${Math.max(7, cell)}px)` });
+    for (const ts of days) {
+      const item = byBucket.get(ts);
+      const v = archiveHeatValue(item, metric);
+      grid.append(h("div", {
+        class: "archive-heat-cell", style: `background:${archiveHeatColor(v, scale)}`,
+        title: `${archiveFmtDate(ts)}\n${item ? `${item.messages} messages · ${item.authors} people · heat ${item.heat}` : "no messages"}`,
+        onclick: () => applyHeatWindow(ts, seconds, item),
+      }));
+    }
+    nodes.push(h("div", { class: "archive-heat-scroll" }, grid));
+  } else {
+    const dayStart = archiveLocalBucket(after, 86400);
+    const dayEnd = archiveLocalBucket(before, 86400);
+    const days = [];
+    for (let ts = dayStart; ts <= dayEnd; ts += 86400) days.push(ts);
+    const grid = h("div", {
+      class: "archive-heat-grid",
+      style: `grid-auto-flow:column;grid-template-rows:repeat(24,${cell}px);grid-template-columns:repeat(${days.length},${cell}px)`,
+    });
+    for (const day of days) {
+      for (let hh = 0; hh < 24; hh++) {
+        const ts = day + hh * 3600;
+        const item = byBucket.get(ts);
+        const v = archiveHeatValue(item, metric);
+        grid.append(h("div", {
+          class: "archive-heat-cell", style: `background:${archiveHeatColor(v, scale)}`,
+          title: `${archiveFmtDateTime(ts)}\n${item ? `${item.messages} messages · ${item.authors} people · heat ${item.heat}` : "no messages"}`,
+          onclick: () => applyHeatWindow(ts, seconds, item),
+        }));
+      }
+    }
+    const hours = h("div", { class: "archive-heat-hours", style: `grid-template-rows:repeat(24,${cell}px)` },
+      Array.from({ length: 24 }, (_, i) => h("span", { style: `height:${cell}px` }, String(i).padStart(2, "0"))));
+    nodes.push(h("div", { class: "archive-heat-wrap" }, hours,
+      h("div", { class: "archive-heat-scroll" }, grid)));
+  }
+  const legend = h("div", { class: "archive-heat-legend" },
+    h("span", null, "low"), ...[0.15, 0.35, 0.55, 0.75, 1].map((t) =>
+      h("span", { class: "archive-heat-swatch", style: `background:${archiveHeatColor(1 + t * scale, scale)}` })),
+    h("span", null, "high"));
+  const top = items.filter((x) => archiveHeatValue(x, metric) > 0)
+    .sort((a, b) => archiveHeatValue(b, metric) - archiveHeatValue(a, metric)).slice(0, 8);
+  const hot = h("div", { class: "archive-hot-list" },
+    h("div", { class: "archive-hot-title" }, "Hot moments"),
+    top.length ? top.map((item) => h("button", {
+      class: "archive-hot-item", onclick: () => applyHeatWindow(item.bucket_start, seconds, item),
+    },
+      h("span", null, archiveFmtBucket(item.bucket_start, seconds)),
+      h("span", { class: "dim" }, `${item.messages} msg · ${item.authors} people`),
+      h("span", { class: "archive-hot-score" }, metric === "heat" ? `heat ${item.heat}` : String(archiveHeatValue(item, metric))),
+    )) : h("div", { class: "hint" }, "No activity in this range."));
+  body.replaceChildren(
+    h("div", { class: "hint", style: "margin-bottom:6px" },
+      `${archiveFmtDate(after)} → ${archiveFmtDate(before)} · ${st.channelId && !st.allChannels ? (st.channels.find((c) => c.id === st.channelId) || {}).name || "channel" : "all channels"} · ${metric}`),
+    ...nodes, legend, hot);
+}
+
+function applyHeatWindow(ts, seconds, item) {
+  archiveState.timeWindow = { after: ts, before: ts + seconds - 0.001 };
+  archiveState.resultMode = "browse";
+  archiveState.activeFilter = null;
+  archiveState.anchorMessageId = null;
+  archiveState.newerCursor = null;
+  archiveUpdateHash();
+  refreshMessages(true);
+}
+
+// ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
 async function route() {
   runCleanup();
+  document.body.classList.remove("archive-mode");
   if (AUTH.required && !AUTH.ok) { renderLogin(); return; }
-  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const raw = location.hash.replace(/^#\/?/, "");
+  const [pathPart, queryPart] = raw.split("?");
+  const parts = pathPart.split("/").filter(Boolean);
+  const params = new URLSearchParams(queryPart || "");
+  const section = parts[0] === "packages" ? "packages"
+    : parts[0] === "archive" ? "archive" : "dashboard";
   document.querySelectorAll("#topbar nav a").forEach((a) => {
-    a.classList.toggle("active",
-      a.dataset.nav === (parts[0] === "packages" ? "packages" : "dashboard"));
+    a.classList.toggle("active", a.dataset.nav === section);
   });
   try {
     if (parts[0] === "packages") await renderPackages();
+    else if (parts[0] === "archive") await renderArchive(params);
     else if (parts[0] === "project" && parts[1]) await renderProject(parts[1], parts[2]);
     else await renderDashboard();
   } catch (e) {
@@ -1038,6 +2093,7 @@ async function boot() {
 
 window.addEventListener("hashchange", route);
 window.addEventListener("langchange", () => {
-  if (/^#\/project\/[^/]+\/cheatsheet/.test(location.hash)) route();
+  if (/^#\/project\/[^/]+\/cheatsheet/.test(location.hash) ||
+      /^#\/archive/.test(location.hash)) route();
 });
 boot();
