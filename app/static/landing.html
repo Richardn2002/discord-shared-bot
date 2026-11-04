@@ -77,6 +77,27 @@ secret_get(key)                   # read your project's .env secrets
 kv_get / kv_set / kv_delete / kv_keys / kv_all</pre>
     <p class="dim" data-i18n="helpers_note"></p>
 
+    <h2 data-i18n="h_archive"></h2>
+    <p data-i18n="archive_body"></p>
+    <pre>archive_search(query=None, guild_id=None, channel_id=None,
+               author_id=None, after=None, before=None, limit=50,
+               cursor=None, order="desc", include_bots=True)
+
+archive_query(filter=None, ...same filters...)
+# filter = {"kind": "group", "op": "AND", "children": [
+#   {"kind": "condition", "field": "content", "op": "contains", "value": "Rust"},
+#   {"kind": "condition", "field": "pinned", "op": "is_true"},
+# ]}
+
+archive_context(message_id, channel_id=None, before=20, after=20)
+archive_message(message_id, channel_id=None)
+archive_channels(guild_id=None) -> list
+archive_guilds() -> list
+archive_stats(guild_id=None) -> dict
+archive_heatmap(bucket="hour" | "day", tz_offset=0, ...) -> dict
+archive_attachment_meta(attachment_id) -> dict or None</pre>
+    <p class="dim" data-i18n="archive_note"></p>
+
     <h2 data-i18n="h_behavior"></h2>
     <ul>
       <li data-i18n="b_merge"></li>

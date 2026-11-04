@@ -232,7 +232,7 @@ def get_message(message_id, channel_id=None):
             found = fm is not None and int(fm.get("id")) == int(message_id)
         except (TypeError, ValueError):
             found = False
-        _record_query(args, fm if found else None, None)
+        _record_query("get_message", args, fm if found else None, None)
         return fm if found else None
     qid = next(_qids)
     _send({"type": "query", "qid": qid, "query": "get_message", "args": args})
@@ -241,7 +241,7 @@ def get_message(message_id, channel_id=None):
     while True:
         line = sys.stdin.readline()
         if not line:  # core died
-            _record_query(args, None, "lost connection to core")
+            _record_query("get_message", args, None, "lost connection to core")
             return None
         try:
             msg = json.loads(line)
@@ -249,17 +249,118 @@ def get_message(message_id, channel_id=None):
             continue
         if msg.get("type") == "query_result" and msg.get("qid") == qid:
             err = msg.get("error")
-            _record_query(args, msg.get("value"), err)
+            _record_query("get_message", args, msg.get("value"), err)
             if err:
                 log(f"[framework] get_message({message_id}) failed: {err}")
                 return None
             return msg.get("value")
 
 
-def _record_query(args, value, error):
+def _record_query(query, args, value, error):
     if _ctx is not None:
-        _ctx["queries"].append({"query": "get_message", "args": args,
+        _ctx["queries"].append({"query": query, "args": args,
                                 "result": value, "error": error})
+
+
+def _archive_call(query, args):
+    """Call a read-only archive query in the core process.
+
+    Unlike get_message(), archive queries intentionally go to the core even in
+    test mode: projects are allowed to test against the real archive.
+    """
+    qid = next(_qids)
+    _send({"type": "query", "qid": qid, "query": query, "args": args})
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            _record_query(query, args, None, "lost connection to core")
+            log(f"[framework] {query}() failed: lost connection to core")
+            return None
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("type") == "query_result" and msg.get("qid") == qid:
+            err = msg.get("error")
+            _record_query(query, args, msg.get("value"), err)
+            if err:
+                log(f"[framework] {query}() failed: {err}")
+                return None
+            return msg.get("value")
+
+
+def archive_search(query=None, guild_id=None, channel_id=None, author_id=None,
+                   after=None, before=None, limit=50, cursor=None,
+                   order="desc", include_bots=True):
+    """Search archived messages. Every whitespace-separated term must match.
+    Returns {items, next_cursor, has_more, total, order} or None on failure."""
+    return _archive_call("archive_search", {
+        "query": query, "guild_id": guild_id, "channel_id": channel_id,
+        "author_id": author_id, "after": after, "before": before,
+        "limit": limit, "cursor": cursor, "order": order,
+        "include_bots": include_bots,
+    })
+
+
+def archive_query(filter=None, guild_id=None, channel_id=None, author_id=None,
+                  after=None, before=None, limit=50, cursor=None,
+                  order="desc", include_bots=True):
+    """Run a structured archive query. `filter` is a nested dict tree with
+    AND/OR/NOT groups and {field, op, value} conditions. See the cheatsheet."""
+    return _archive_call("archive_query", {
+        "filter": filter, "guild_id": guild_id, "channel_id": channel_id,
+        "author_id": author_id, "after": after, "before": before,
+        "limit": limit, "cursor": cursor, "order": order,
+        "include_bots": include_bots,
+    })
+
+
+def archive_context(message_id, channel_id=None, before=20, after=20):
+    """Return messages around an archived message (anchor included)."""
+    return _archive_call("archive_context", {
+        "message_id": message_id, "channel_id": channel_id,
+        "before": before, "after": after,
+    })
+
+
+def archive_message(message_id, channel_id=None):
+    """Fetch one archived message by id, or None when missing."""
+    return _archive_call("archive_message", {
+        "message_id": message_id, "channel_id": channel_id,
+    })
+
+
+def archive_channels(guild_id=None):
+    """List archived channels/threads with message counts."""
+    return _archive_call("archive_channels", {"guild_id": guild_id})
+
+
+def archive_guilds():
+    """List archived guilds with channel/message counts."""
+    return _archive_call("archive_guilds", {})
+
+
+def archive_stats(guild_id=None):
+    """Archive statistics, optionally scoped to one guild."""
+    return _archive_call("archive_stats", {"guild_id": guild_id})
+
+
+def archive_heatmap(guild_id=None, channel_id=None, after=None, before=None,
+                    bucket="hour", tz_offset=0, include_bots=True):
+    """Aggregate archive activity. bucket is "hour" or "day"; tz_offset is
+    minutes east of UTC. Returns {bucket_seconds, tz_offset_minutes, items}."""
+    return _archive_call("archive_heatmap", {
+        "guild_id": guild_id, "channel_id": channel_id, "after": after,
+        "before": before, "bucket": bucket, "tz_offset": tz_offset,
+        "include_bots": include_bots,
+    })
+
+
+def archive_attachment_meta(attachment_id):
+    """Metadata for one archived attachment (no bytes)."""
+    return _archive_call("archive_attachment_meta", {
+        "attachment_id": attachment_id,
+    })
 
 
 FRAMEWORK_FUNCS = {
@@ -276,6 +377,15 @@ FRAMEWORK_FUNCS = {
     "kv_all": kv_all,
     "secret_get": secret_get,
     "get_message": get_message,
+    "archive_search": archive_search,
+    "archive_query": archive_query,
+    "archive_context": archive_context,
+    "archive_message": archive_message,
+    "archive_channels": archive_channels,
+    "archive_guilds": archive_guilds,
+    "archive_stats": archive_stats,
+    "archive_heatmap": archive_heatmap,
+    "archive_attachment_meta": archive_attachment_meta,
 }
 
 EVENT_HANDLERS = [

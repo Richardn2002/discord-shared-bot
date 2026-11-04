@@ -82,6 +82,67 @@ no loops. Custom emojis arrive as `"<:name:id>"`.
 | `kv_get(key, default=None)` / `kv_set(key, value)` / `kv_delete(key)` / `kv_keys()` / `kv_all()` | persistent per-project JSON store; **values must be JSON-serializable** |
 | `get_message(message_id, channel_id=None)` | fetch any message the bot can see (channel defaults to the event's). Returns the message dict above, or **None** on any failure (not found / no access / bot offline — also logged). Lookups appear under `queries` in results. **In test mode it never touches Discord**: pass `fake_message` with the test call — an id matching it returns it, any other id returns None. |
 | `secret_get(key, default=None)` | read the project's `.env` secret store (read-only from code). Strings. File is gitignored by convention. |
+| `archive_search(...)`, `archive_query(...)`, `archive_context(...)`, `archive_message(...)`, `archive_channels(...)`, `archive_guilds()`, `archive_stats(...)`, `archive_heatmap(...)`, `archive_attachment_meta(...)` | read-only historical archive queries. See **Archive queries (read-only)** below for signatures, filters, fields, operators and return shapes. |
+
+### Archive queries (read-only)
+
+```python
+archive_search(query=None, guild_id=None, channel_id=None, author_id=None,
+               after=None, before=None, limit=50, cursor=None,
+               order="desc", include_bots=True)
+archive_query(filter=None, ...same filters...)
+archive_context(message_id, channel_id=None, before=20, after=20)
+archive_message(message_id, channel_id=None)
+archive_channels(guild_id=None)
+archive_guilds()
+archive_stats(guild_id=None)
+archive_heatmap(guild_id=None, channel_id=None, after=None, before=None,
+                bucket="hour", tz_offset=0, include_bots=True)
+archive_attachment_meta(attachment_id)
+```
+
+Archive message results have the same useful fields as event messages:
+`id`, `content`, `author{id,name,display_name,is_bot}`, `channel_id`,
+`channel_name`, `guild_id`, `guild_name`, `attachments`, `embeds`, `reply_to`,
+`pinned`, `created_at`/`created_ts`, `edited_at`/`edited_ts`, `jump_url`.
+IDs are integers in project code. Search responses also carry `next_cursor`,
+`has_more`, `total` and `order`.
+
+`archive_query` takes a nested filter tree:
+
+```python
+filter = {
+    "kind": "group", "op": "AND", "children": [
+        {"kind": "condition", "field": "content", "op": "contains", "value": "Rust"},
+        {"kind": "group", "op": "OR", "children": [
+            {"kind": "condition", "field": "attachment_filename", "op": "contains", "value": ".png"},
+            {"kind": "condition", "field": "pinned", "op": "is_true"},
+        ]},
+    ],
+}
+result = archive_query(filter=filter, channel_id=message["channel_id"], limit=20)
+for m in result["items"]:
+    log(f'{m["created_at"]} {m["author"]["display_name"]}: {m["content"][:80]}')
+```
+
+Available fields: `content`, `search_text`, `author_id`, `author_name`,
+`author_display_name`, `author_is_bot`, `channel_id`, `channel_name`, `guild_id`,
+`guild_name`, `created_ts`, `created_at`, `edited_ts`, `edited_at`,
+`message_type`, `reference_message_id`, `reference_channel_id`, `pinned`,
+`has_attachments`, `has_embeds`, `content_length`, `attachment_count`,
+`attachment_filename`, `attachment_content_type`, `attachment_size_bytes`,
+`attachment_kind`, `attachment_state`, `id`.
+
+Operators: `contains`, `not_contains`, `equals`, `not_equals`, `starts_with`,
+`ends_with`, `in`, `not_in`, `gt`, `gte`, `lt`, `lte`, `between`, `is_empty`,
+`is_not_empty`, `is_true`, `is_false`, `is_null`, `not_null`, `regex`.
+Groups use `op: "AND" | "OR" | "NOT"` and may nest.
+
+**Test mode:** unlike `get_message()`, archive functions intentionally query the
+real archive during test runs, so you can test against real conversations. Every
+call is recorded under `queries` in the test result. Archive access is read-only:
+there is no API to modify or delete archived data, and attachment metadata is
+available but bytes are not returned over the worker protocol.
 
 Rules of thumb:
 - Handlers must finish quickly (see `timeout`); never busy-wait.
@@ -168,31 +229,20 @@ apply immediately (read from disk on every `secret_get` call). The .env file
 is listed in files/.gitignore so it won't end up in the shared git repo.
 
 ### Archive explorer (read-only)
+Same filter tree, fields and operators as the project-facing archive queries in
+section 3; HTTP responses use string IDs. Endpoints:
 ```bash
-curl "$BASE/api/archive/stats"
+curl "$BASE/api/archive/stats?guild_id=999"
+curl "$BASE/api/archive/guilds"
 curl "$BASE/api/archive/channels?guild_id=999"
+curl "$BASE/api/archive/users?guild_id=999&limit=50"
 curl "$BASE/api/archive/messages?channel_id=555&limit=50&before=1730000000"
+curl "$BASE/api/archive/messages/1001?channel_id=555"
 curl "$BASE/api/archive/context?message_id=1001&before=20&after=20"
 curl "$BASE/api/archive/heatmap?bucket=hour&tz_offset=480"
+curl "$BASE/api/archive/attachments/ATTACHMENT_ID?download=1"
+curl -X POST $BASE/api/archive/query -d '{"filter": {...}, "channel_id":"555", "limit":50}'
 ```
-Complex search uses a nested filter tree:
-```bash
-curl -X POST $BASE/api/archive/query -d '{
-  "filter": {"kind":"group","op":"AND","children":[
-    {"kind":"condition","field":"content","op":"contains","value":"Rust"},
-    {"kind":"group","op":"OR","children":[
-      {"kind":"condition","field":"attachment_filename","op":"contains","value":"png"},
-      {"kind":"condition","field":"pinned","op":"is_true"}
-    ]}
-  ]},
-  "channel_id":"555","limit":50}'
-```
-Fields include message content, author/channel/server ids and names, dates,
-pinned/attachments/embeds flags, reply ids, attachment filename/type/size/count,
-and message length. Operators include contains / not_contains, equals, starts_with,
-ends_with, in, comparisons, between, is_empty, is_true/is_false, and regex.
-Snowflake IDs in responses are strings. The same store methods will back future
-project-facing `archive_*` handler primitives.
 
 ### Packages
 ```bash

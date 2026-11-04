@@ -173,13 +173,12 @@ class Worker:
                     _console(self.project, f"worker exited unexpectedly (code {code})", "ERROR")
 
     async def _answer_query(self, msg: dict) -> None:
-        """Worker asked us something mid-handler (e.g. get_message). Answer over
-        its stdin so the handler can continue."""
+        """Worker asked us something mid-handler (e.g. get_message or an
+        archive query). Answer over its stdin so the handler can continue."""
         answer = {"type": "query_result", "qid": msg.get("qid")}
+        query = msg.get("query")
         try:
-            if msg.get("query") != "get_message":
-                answer["error"] = f"unknown query '{msg.get('query')}'"
-            else:
+            if query == "get_message":
                 args = msg.get("args") or {}
                 ex = Manager.INSTANCE.executor if Manager.INSTANCE else None
                 if ex is None or not hasattr(ex, "fetch_message"):
@@ -190,6 +189,10 @@ class Worker:
                     answer["value"] = await ex.fetch_message(
                         channel_id=int(args["channel_id"]),
                         message_id=int(args["message_id"]))
+            elif str(query or "").startswith("archive_"):
+                answer["value"] = await self._answer_archive_query(query, msg.get("args") or {})
+            else:
+                answer["error"] = f"unknown query '{query}'"
         except Exception as e:
             answer["error"] = str(e)
         try:
@@ -198,6 +201,68 @@ class Worker:
                 await self.proc.stdin.drain()
         except Exception:
             pass
+
+    async def _answer_archive_query(self, query: str, args: dict):
+        from .archive import explorer
+        from .archive.service import archive_service
+
+        store = archive_service.store
+        if store is None:
+            raise RuntimeError("archive is not enabled or not running")
+        if query == "archive_search":
+            return await asyncio.to_thread(
+                explorer.search_messages, store, args.get("query"),
+                guild_id=args.get("guild_id"), channel_id=args.get("channel_id"),
+                author_id=args.get("author_id"), before=args.get("before"),
+                after=args.get("after"), limit=args.get("limit", 50),
+                cursor=args.get("cursor"), order=args.get("order", "desc"),
+                include_bots=args.get("include_bots", True), string_ids=False)
+        if query == "archive_query":
+            filter_ast = args.get("filter")
+            if isinstance(filter_ast, str):
+                filter_ast = json.loads(filter_ast)
+            return await asyncio.to_thread(
+                explorer.query_messages, store, {
+                    "filter": filter_ast, "guild_id": args.get("guild_id"),
+                    "channel_id": args.get("channel_id"),
+                    "author_id": args.get("author_id"),
+                    "before": args.get("before"), "after": args.get("after"),
+                    "limit": args.get("limit", 50), "cursor": args.get("cursor"),
+                    "order": args.get("order", "desc"),
+                    "include_bots": args.get("include_bots", True),
+                }, string_ids=False)
+        if query == "archive_context":
+            return await asyncio.to_thread(
+                explorer.message_context, store, args.get("message_id"),
+                channel_id=args.get("channel_id"),
+                before=args.get("before", 20), after=args.get("after", 20),
+                string_ids=False)
+        if query == "archive_message":
+            return await asyncio.to_thread(
+                explorer.get_message, store, args.get("message_id"),
+                channel_id=args.get("channel_id"), string_ids=False)
+        if query == "archive_channels":
+            return await asyncio.to_thread(
+                explorer.channels, store, args.get("guild_id"),
+                string_ids=False)
+        if query == "archive_guilds":
+            return await asyncio.to_thread(explorer.guilds, store,
+                                           string_ids=False)
+        if query == "archive_stats":
+            return await asyncio.to_thread(
+                explorer.stats, store, args.get("guild_id"))
+        if query == "archive_heatmap":
+            return await asyncio.to_thread(
+                explorer.heatmap, store, guild_id=args.get("guild_id"),
+                channel_id=args.get("channel_id"), after=args.get("after"),
+                before=args.get("before"), bucket=args.get("bucket", "hour"),
+                tz_offset=args.get("tz_offset", 0),
+                include_bots=args.get("include_bots", True))
+        if query == "archive_attachment_meta":
+            return await asyncio.to_thread(
+                explorer.attachment_meta, store, args.get("attachment_id"),
+                string_ids=False)
+        raise RuntimeError(f"unknown archive query '{query}'")
 
     async def _stderr_reader(self) -> None:
         try:

@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import bot, packages, projects
+from .archive import explorer as archive_explorer
 from .archive.service import archive_service
 from .archive.store import ArchiveQueryError
 from .config import APP_DIR, CONFIG
@@ -137,156 +138,33 @@ def _archive_store():
     return store
 
 
-def _sid(value):
-    return None if value is None else str(value)
-
-
-def _message_payload(row: dict, attachments=None, reply=None) -> dict:
-    raw = {}
-    try:
-        raw = json.loads(row.get("raw_json") or "{}")
-    except Exception:
-        raw = {}
-    embeds = []
-    for e in (raw.get("embeds") or [])[:5]:
-        if not isinstance(e, dict):
-            continue
-        embeds.append({
-            "type": e.get("type"),
-            "title": e.get("title"),
-            "description": e.get("description"),
-            "url": e.get("url"),
-            "color": e.get("color"),
-            "timestamp": e.get("timestamp"),
-            "fields": [
-                {"name": f.get("name"), "value": f.get("value"),
-                 "inline": bool(f.get("inline"))}
-                for f in (e.get("fields") or []) if isinstance(f, dict)
-            ][:20],
-            "author": {
-                "name": (e.get("author") or {}).get("name"),
-                "url": (e.get("author") or {}).get("url"),
-                "icon_url": (e.get("author") or {}).get("icon_url"),
-            } if isinstance(e.get("author"), dict) else None,
-            "footer": {
-                "text": (e.get("footer") or {}).get("text"),
-                "icon_url": (e.get("footer") or {}).get("icon_url"),
-            } if isinstance(e.get("footer"), dict) else None,
-            "image": {
-                "url": (e.get("image") or {}).get("url"),
-                "width": (e.get("image") or {}).get("width"),
-                "height": (e.get("image") or {}).get("height"),
-            } if isinstance(e.get("image"), dict) else None,
-            "thumbnail": {
-                "url": (e.get("thumbnail") or {}).get("url"),
-                "width": (e.get("thumbnail") or {}).get("width"),
-                "height": (e.get("thumbnail") or {}).get("height"),
-            } if isinstance(e.get("thumbnail"), dict) else None,
-        })
-    reply_to = None
-    if reply:
-        reply_to = {
-            "id": _sid(reply.get("id")),
-            "author_name": reply.get("author_display_name") or reply.get("author_name"),
-            "content": (reply.get("content") or "")[:160],
-        }
-    return {
-        "id": _sid(row.get("id")),
-        "guild_id": _sid(row.get("guild_id")),
-        "channel_id": _sid(row.get("channel_id")),
-        "channel_name": row.get("channel_name"),
-        "channel_is_thread": bool(row.get("channel_is_thread")),
-        "guild_name": row.get("guild_name"),
-        "author": {
-            "id": _sid(row.get("author_id")),
-            "name": row.get("author_name"),
-            "display_name": row.get("author_display_name") or row.get("author_name"),
-            "is_bot": bool(row.get("author_is_bot")),
-        },
-        "content": row.get("content") or "",
-        "created_at": row.get("created_at"),
-        "created_ts": row.get("created_ts"),
-        "edited_at": row.get("edited_at"),
-        "edited_ts": row.get("edited_ts"),
-        "message_type": row.get("message_type"),
-        "reference_message_id": _sid(row.get("reference_message_id")),
-        "reference_channel_id": _sid(row.get("reference_channel_id")),
-        "pinned": bool(row.get("pinned")),
-        "has_attachments": bool(row.get("has_attachments")),
-        "has_embeds": bool(row.get("has_embeds")),
-        "attachments": [{
-            "id": _sid(a.get("id")),
-            "filename": a.get("filename"),
-            "content_type": a.get("content_type"),
-            "size_bytes": a.get("size_bytes"),
-            "width": a.get("width"),
-            "height": a.get("height"),
-            "kind": a.get("kind"),
-            "state": a.get("state"),
-            "available": bool(a.get("sha256")) and a.get("state") == "ready",
-        } for a in (attachments or [])],
-        "embeds": embeds,
-        "reply_to": reply_to,
-    }
-
-
 def _serialize_messages(rows: list[dict], store) -> list[dict]:
-    if not rows:
-        return []
-    ids = [r.get("id") for r in rows]
-    attachment_map = store.attachments_for_messages(ids)
-    ref_ids = [r.get("reference_message_id") for r in rows
-               if r.get("reference_message_id")]
-    ref_map = {str(r["id"]): r for r in store.get_messages(ref_ids)} if ref_ids else {}
-    return [
-        _message_payload(
-            row,
-            attachments=attachment_map.get(str(row.get("id")), []),
-            reply=ref_map.get(str(row.get("reference_message_id"))),
-        )
-        for row in rows
-    ]
+    return archive_explorer.serialize_messages(store, rows)
 
 
 def _run_query(store, body: dict) -> dict:
     try:
-        result = store.query_messages(
-            body.get("filter"), guild_id=body.get("guild_id"),
-            channel_id=body.get("channel_id"), author_id=body.get("author_id"),
-            before=body.get("before"), after=body.get("after"),
-            limit=body.get("limit", 50), cursor=body.get("cursor"),
-            order=body.get("order", "desc"),
-            include_bots=body.get("include_bots", True),
-        )
+        return archive_explorer.query_messages(store, body)
     except ArchiveQueryError as e:
         raise HTTPException(400, str(e))
-    result["items"] = _serialize_messages(result["items"], store)
-    return result
 
 
 @app.get("/api/archive/stats")
-async def archive_stats():
+async def archive_stats(guild_id: str | None = Query(None)):
     store = _archive_store()
-    stats = await asyncio.to_thread(store.stats)
-    return stats
+    return await asyncio.to_thread(archive_explorer.stats, store, guild_id)
 
 
 @app.get("/api/archive/guilds")
 async def archive_guilds():
     store = _archive_store()
-    rows = await asyncio.to_thread(store.guilds)
-    return [{**r, "id": _sid(r.get("id"))} for r in rows]
+    return await asyncio.to_thread(archive_explorer.guilds, store)
 
 
 @app.get("/api/archive/channels")
 async def archive_channels(guild_id: str | None = Query(None)):
     store = _archive_store()
-    rows = await asyncio.to_thread(store.channels, guild_id)
-    for r in rows:
-        r["id"] = _sid(r.get("id"))
-        r["guild_id"] = _sid(r.get("guild_id"))
-        r["parent_id"] = _sid(r.get("parent_id"))
-    return rows
+    return await asyncio.to_thread(archive_explorer.channels, store, guild_id)
 
 
 @app.get("/api/archive/users")
@@ -294,8 +172,7 @@ async def archive_users(guild_id: str | None = Query(None),
                         q: str | None = Query(None),
                         limit: int = Query(50, ge=1, le=200)):
     store = _archive_store()
-    rows = await asyncio.to_thread(store.users, guild_id, q, limit)
-    return [{**r, "id": _sid(r.get("id"))} for r in rows]
+    return await asyncio.to_thread(archive_explorer.users, store, guild_id, q, limit)
 
 
 @app.get("/api/archive/messages")

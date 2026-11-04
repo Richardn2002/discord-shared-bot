@@ -1193,19 +1193,39 @@ class ArchiveStore:
             next_cursor = f"{last['created_ts']}:{last['id']}"
         return {"items": items, "next_cursor": next_cursor}
 
-    def stats(self) -> dict:
+    def stats(self, guild_id=None) -> dict:
         with self._lock:
-            one = lambda sql: self.conn.execute(sql).fetchone()[0]
+            one = lambda sql, args=(): self.conn.execute(sql, args).fetchone()[0]
+            if not guild_id:
+                return {
+                    "messages": one("SELECT COUNT(*) FROM messages"),
+                    "channels": one("SELECT COUNT(*) FROM channels"),
+                    "threads": one("SELECT COUNT(*) FROM channels WHERE is_thread=1"),
+                    "users": one("SELECT COUNT(*) FROM users"),
+                    "attachments": one("SELECT COUNT(*) FROM attachments"),
+                    "blobs": one("SELECT COUNT(*) FROM blobs"),
+                    "blob_bytes": one("SELECT COALESCE(SUM(size_bytes),0) FROM blobs"),
+                    "remote_blobs": one("SELECT COUNT(*) FROM blobs WHERE state='remote'"),
+                    "local_blobs": one("SELECT COUNT(*) FROM blobs WHERE state='local'"),
+                    "oldest_ts": one("SELECT COALESCE(MIN(created_ts),0) FROM messages"),
+                    "newest_ts": one("SELECT COALESCE(MAX(created_ts),0) FROM messages"),
+                }
+            gid = int(guild_id)
+            sha_sql = ("SELECT DISTINCT sha256 FROM attachments "
+                       "WHERE guild_id=? AND sha256 IS NOT NULL")
             return {
-                "messages": one("SELECT COUNT(*) FROM messages"),
-                "channels": one("SELECT COUNT(*) FROM channels"),
-                "threads": one("SELECT COUNT(*) FROM channels WHERE is_thread=1"),
-                "users": one("SELECT COUNT(*) FROM users"),
-                "attachments": one("SELECT COUNT(*) FROM attachments"),
-                "blobs": one("SELECT COUNT(*) FROM blobs"),
-                "blob_bytes": one("SELECT COALESCE(SUM(size_bytes),0) FROM blobs"),
-                "remote_blobs": one("SELECT COUNT(*) FROM blobs WHERE state='remote'"),
-                "local_blobs": one("SELECT COUNT(*) FROM blobs WHERE state='local'"),
-                "oldest_ts": one("SELECT COALESCE(MIN(created_ts),0) FROM messages"),
-                "newest_ts": one("SELECT COALESCE(MAX(created_ts),0) FROM messages"),
+                "messages": one("SELECT COUNT(*) FROM messages WHERE guild_id=?", (gid,)),
+                "channels": one("SELECT COUNT(*) FROM channels WHERE guild_id=?", (gid,)),
+                "threads": one("SELECT COUNT(*) FROM channels WHERE guild_id=? AND is_thread=1", (gid,)),
+                "users": one("SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id=?", (gid,)),
+                "attachments": one("SELECT COUNT(*) FROM attachments WHERE guild_id=?", (gid,)),
+                "blobs": one(f"SELECT COUNT(*) FROM ({sha_sql})", (gid,)),
+                "blob_bytes": one("SELECT COALESCE(SUM(size_bytes),0) FROM blobs "
+                                  f"WHERE sha256 IN ({sha_sql})", (gid,)),
+                "remote_blobs": one("SELECT COUNT(*) FROM blobs WHERE state='remote' "
+                                    f"AND sha256 IN ({sha_sql})", (gid,)),
+                "local_blobs": one("SELECT COUNT(*) FROM blobs WHERE state='local' "
+                                   f"AND sha256 IN ({sha_sql})", (gid,)),
+                "oldest_ts": one("SELECT COALESCE(MIN(created_ts),0) FROM messages WHERE guild_id=?", (gid,)),
+                "newest_ts": one("SELECT COALESCE(MAX(created_ts),0) FROM messages WHERE guild_id=?", (gid,)),
             }

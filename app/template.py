@@ -42,6 +42,27 @@ HANDLER_TEMPLATE = '''\
 #                                          fetch any message the bot can see;
 #                                          returns a dict like below, or None
 #
+#   archive_search(query=None, guild_id=None, channel_id=None, author_id=None,
+#                  after=None, before=None, limit=50, cursor=None,
+#                  order="desc", include_bots=True)
+#                                          read-only search of the message
+#                                          archive; all terms must match
+#   archive_query(filter=None, ...same filters...)
+#                                          structured archive query with nested
+#                                          AND/OR/NOT groups and field conditions
+#   archive_context(message_id, channel_id=None, before=20, after=20)
+#                                          messages around an archived message
+#   archive_message(message_id, channel_id=None)
+#   archive_channels(guild_id=None) / archive_guilds()
+#   archive_stats(guild_id=None)
+#   archive_heatmap(guild_id=None, channel_id=None, after=None, before=None,
+#                   bucket="hour", tz_offset=0, include_bots=True)
+#   archive_attachment_meta(attachment_id)
+#                                          read-only archive helpers; see the
+#                                          cheatsheet/agent guide for filter
+#                                          fields, operators and return shapes.
+#                                          Tests may query the real archive.
+#
 # Handlers below are called when the matching Discord event fires. Delete the
 # ones you do not care about (or leave them commented). If a handler raises
 # or runs longer than the project timeout, on_failure() is called.

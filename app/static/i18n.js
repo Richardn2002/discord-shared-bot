@@ -23,6 +23,9 @@ window.I18N = {
     events_body: "Your functions get called when these happen:",
     events_note: "Each handler receives a dictionary describing what happened (author, channel, message text or emoji). Messages from bots never trigger events.",
     h_helpers: "Helpers",
+    h_archive: "Archive queries",
+    archive_body: "Projects can read the historical message archive from any handler. Queries are read-only, and tests may query the real archive even though normal Discord lookups use fake data.",
+    archive_note: "Filters support nested AND/OR/NOT groups over message text, author, channel, server, dates, attachments, replies and flags. See the cheatsheet for the full field/operator list.",
     helpers_body: "Inside your handlers you can call:",
     helpers_note: "kv_* is your project's persistent key-value store (JSON values). log()/print() goes to the project's console.",
     h_behavior: "Behavior worth knowing",
@@ -57,6 +60,9 @@ window.I18N = {
     events_body: "以下事件发生时会调用你写的函数：",
     events_note: "每个处理函数会收到一个描述事件的字典（作者、频道、消息内容或表情）。机器人发出的消息不会触发事件。",
     h_helpers: "辅助函数",
+    h_archive: "归档查询",
+    archive_body: "项目可以在任意处理函数中读取历史消息归档。查询为只读；测试时允许直接查询真实归档，而普通 Discord 查询仍使用模拟消息。",
+    archive_note: "过滤条件支持嵌套 AND/OR/NOT，可查询消息文本、作者、频道、服务器、时间、附件、回复和标记。完整字段/运算符列表见速查表。",
     helpers_body: "在处理函数里可以直接调用：",
     helpers_note: "kv_* 是项目专属的持久键值存储（值为 JSON）。log()/print() 会写入项目日志。",
     h_behavior: "需要知道的行为",
@@ -103,6 +109,20 @@ window.CHEATSHEET = {
       rows: [
         ["get_message(message_id, channel_id=None)", "fetch any message the bot can see (default channel: the event's). Returns the same dict on_message gets, or None on failure (also logged). Example: get_message(message[\"reply_to\"][\"message_id\"]). In tests: returns the Test tab's fake lookup message when the id matches (else None) — never touches Discord."],
       ],
+    },
+    {
+      title: "Archive",
+      rows: [
+        ["archive_search(query=None, guild_id=None, channel_id=None, author_id=None, after=None, before=None, limit=50, cursor=None, order=\"desc\", include_bots=True)", "read-only historical search. Whitespace-separated terms are ANDed. Returns {items, next_cursor, has_more, total, order} or None; before/after are unix seconds. IDs in results are ints."],
+        ["archive_query(filter=None, ...same filters...)", "structured search. filter is a nested tree: {kind:\"group\", op:\"AND|OR|NOT\", children:[...]} or {kind:\"condition\", field, op, value}. Fields: content, search_text, author_id/name/display_name/is_bot, channel_id/name, guild_id/name, created_ts, edited_ts, pinned, has_attachments, has_embeds, reference_message_id, message_type, content_length, attachment_filename/content_type/size_bytes/kind/count. Ops: contains/not_contains, equals/not_equals, starts_with/ends_with, in/not_in, gt/gte/lt/lte, between, is_empty/is_not_empty, is_true/is_false, is_null/not_null, regex."],
+        ["archive_context(message_id, channel_id=None, before=20, after=20)", "messages around an archived message: {anchor_id, items, has_older, has_newer}, or None. Use IDs from any search result."],
+        ["archive_message(message_id, channel_id=None)", "one archived message dict, or None."],
+        ["archive_channels(guild_id=None) / archive_guilds()", "channel/thread list with message_count and last_ts; guild list with channel/message counts."],
+        ["archive_stats(guild_id=None)", "message/channel/thread/user/attachment/blob counts plus oldest/newest timestamps; optional guild scope."],
+        ["archive_heatmap(guild_id=None, channel_id=None, after=None, before=None, bucket=\"hour\", tz_offset=0, include_bots=True)", "activity buckets: {bucket_seconds, tz_offset_minutes, items:[{bucket_start, messages, authors, chars, attachments, heat}]}. tz_offset is minutes east of UTC."],
+        ["archive_attachment_meta(attachment_id)", "archived attachment metadata (no bytes): filename, content_type, size_bytes, state, sha256, available."],
+      ],
+      note: "Archive calls are read-only and record under queries in test results. Unlike get_message(), tests may query the real archive. A message dict has id, content, author, channel/guild ids and names, attachments, embeds, reply_to, timestamps and jump_url.",
     },
     {
       title: "KV & secrets",
@@ -153,6 +173,20 @@ window.CHEATSHEET = {
       rows: [
         ["get_message(message_id, channel_id=None)", "获取机器人可见的任意消息（默认频道为事件所在频道）。返回与 on_message 相同的字典，失败时返回 None（并写入日志）。例：get_message(message[\"reply_to\"][\"message_id\"])。测试时：若 id 与 Test 页配置的假消息一致则返回它，否则返回 None；测试中不会访问 Discord。"],
       ],
+    },
+    {
+      title: "归档查询",
+      rows: [
+        ["archive_search(query=None, guild_id=None, channel_id=None, author_id=None, after=None, before=None, limit=50, cursor=None, order=\"desc\", include_bots=True)", "只读搜索历史归档消息；空白分隔的多个词必须全部匹配。返回 {items, next_cursor, has_more, total, order}，失败返回 None；before/after 为 Unix 秒。结果中的 ID 为整数。"],
+        ["archive_query(filter=None, ...同上...)", "结构化查询。filter 是嵌套树：{kind:\"group\", op:\"AND|OR|NOT\", children:[...]} 或 {kind:\"condition\", field, op, value}。字段：content、search_text、author_id/name/display_name/is_bot、channel_id/name、guild_id/name、created_ts、edited_ts、pinned、has_attachments、has_embeds、reference_message_id、message_type、content_length、attachment_filename/content_type/size_bytes/kind/count。运算符：contains/not_contains、equals/not_equals、starts_with/ends_with、in/not_in、gt/gte/lt/lte、between、is_empty/is_not_empty、is_true/is_false、is_null/not_null、regex。"],
+        ["archive_context(message_id, channel_id=None, before=20, after=20)", "获取某条归档消息的上下文：{anchor_id, items, has_older, has_newer}，失败返回 None。可直接使用搜索结果里的 ID。"],
+        ["archive_message(message_id, channel_id=None)", "获取一条归档消息，找不到时返回 None。"],
+        ["archive_channels(guild_id=None) / archive_guilds()", "频道/子区列表及消息数、最后时间；服务器列表及频道/消息数。"],
+        ["archive_stats(guild_id=None)", "消息/频道/子区/用户/附件/blob 统计及最早/最新时间；可限定服务器。"],
+        ["archive_heatmap(guild_id=None, channel_id=None, after=None, before=None, bucket=\"hour\", tz_offset=0, include_bots=True)", "活跃度分桶：{bucket_seconds, tz_offset_minutes, items:[{bucket_start, messages, authors, chars, attachments, heat}]}。tz_offset 为 UTC 以东分钟数。"],
+        ["archive_attachment_meta(attachment_id)", "归档附件元数据（不含字节）：filename、content_type、size_bytes、state、sha256、available。"],
+      ],
+      note: "归档函数只读，并在测试结果的 queries 中记录。与 get_message() 不同，测试时允许查询真实归档。消息字典包含 id、content、author、频道/服务器 id 与名称、attachments、embeds、reply_to、时间戳与 jump_url。",
     },
     {
       title: "KV 与密钥",

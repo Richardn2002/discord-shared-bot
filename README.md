@@ -124,6 +124,12 @@ daily activity heatmap with clickable hot moments. Attachments stream through th
 core, so Nextcloud credentials never reach the browser. Read-only endpoints live
 under `/api/archive/*`.
 
+Projects can query the same archive from handlers through injected functions:
+`archive_search(...)`, `archive_query(filter, ...)`, `archive_context(...)`,
+`archive_message(...)`, `archive_channels(...)`, `archive_guilds()`,
+`archive_stats(...)`, `archive_heatmap(...)` and `archive_attachment_meta(...)`.
+See the project cheatsheet or `static/agent-guide.md` for fields/operators.
+
 Incremental sync only follows messages after each channel's stored cursor. It
 cannot see edits to older messages that happened while the bot was offline. For
 that, run a manual full reconciliation:

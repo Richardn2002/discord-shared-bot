@@ -108,13 +108,12 @@ Handler timeout → worker killed, restarted, `on_failure` re-run on the fresh
 process with `_failure_of`/`_error` set; its actions still deliver via
 `deliver_adhoc` (labelled).
 
-## Archive system (backend + web explorer done; project access next)
+## Archive system (backend + web explorer + project queries)
 
 The platform also maintains a local historical archive of guild messages. The
-archive backend, live gateway integration, Nextcloud blob storage, backups, a
-manual reconcile CLI and the read-only web explorer are implemented. The
-project-facing query methods are **not implemented yet**; see the worker-query
-section below.
+archive backend, live gateway integration, Nextcloud blob storage, backups, the
+read-only web explorer and project-facing archive queries are implemented. See
+the worker-query section below for the handler API.
 
 Current archive coverage at the time of this handoff: ~58k messages, ~8k
 attachments, ~14.1 GB of blobs on Nextcloud. Two channels the bot cannot view
@@ -132,6 +131,7 @@ app/archive/
                     #   edit/delete cleanup
   backfill.py       # discovery + incremental scan + optional full reconcile
   service.py        # live integration owned by the FastAPI lifespan
+  explorer.py       # shared read-only result shaping + query facade for web/workers
 tools/
   archive_backfill.py   # incremental or forced catch-up CLI
   archive_reconcile.py  # manual full reconcile CLI
@@ -209,7 +209,7 @@ Useful read/query methods already present:
 
 The console has an `Archive` tab with a Discord-like channel/thread browser on
 the left and a query/heatmap pane on the right. It is backed by the same
-read-only `ArchiveStore` methods that future project-facing queries should use.
+read-only `ArchiveStore` methods that project-facing queries also use.
 
 Store read helpers added for the explorer (all synchronous, thread-safe):
 
@@ -239,45 +239,52 @@ HTTP read endpoints (auth middleware applies; all read-only):
 - `GET /api/archive/attachments/{attachment_id}` streaming local/Nextcloud bytes
 
 Message JSON serializes Discord snowflake IDs as strings (JavaScript precision).
-The query engine lives in `store.py`; HTTP shaping lives in `main.py`. The
-project-facing worker bridge below should call `query_messages`, `get_messages`,
-`message_context`, `channels`, `heatmap`, etc. rather than reimplementing SQL.
+The query engine lives in `store.py`; public shaping lives in
+`app/archive/explorer.py` and is shared by `main.py` and the worker bridge.
+
+### Project-facing archive queries (implemented)
+
+Projects run in isolated subprocesses and cannot read SQLite/Nextcloud directly.
+The worker `query` protocol now exposes read-only archive calls; core answers in
+`Manager._answer_archive_query` using the same `app/archive/explorer.py` facade
+and `ArchiveStore` methods as the web API.
+
+Injected handler functions:
+
+- `archive_search(query=None, guild_id=None, channel_id=None, author_id=None,
+  after=None, before=None, limit=50, cursor=None, order="desc",
+  include_bots=True)`
+- `archive_query(filter=None, ...same filters...)`
+- `archive_context(message_id, channel_id=None, before=20, after=20)`
+- `archive_message(message_id, channel_id=None)`
+- `archive_channels(guild_id=None)`, `archive_guilds()`
+- `archive_stats(guild_id=None)`
+- `archive_heatmap(guild_id=None, channel_id=None, after=None, before=None,
+  bucket="hour", tz_offset=0, include_bots=True)`
+- `archive_attachment_meta(attachment_id)` — metadata only, no bytes.
+
+Project-facing results use integer Discord IDs; HTTP results use strings.
+Archive queries intentionally query real archive data in test mode and are
+recorded under `queries`. No mutating archive API is exposed to projects.
 
 ### What is NOT implemented yet
 
-1. **Project-facing archive methods** — projects run in isolated subprocesses and
-   cannot read SQLite/Nextcloud directly. Extend the existing worker `query`
-   protocol (`worker_runner.py` sends `{"type":"query","query":...,"args":...}`;
-   core answers in `Manager._answer_query`). Add read-only query names and
-   framework functions in `worker_runner.py`, reusing the store methods above:
-   - `archive_search(query=None, guild_id=None, channel_id=None, author_id=None,
-     after=None, before=None, limit=50, cursor=None, include_bots=True)`
-   - `archive_query(filter=None, guild_id=None, channel_id=None, after=None,
-     before=None, limit=50, cursor=None, include_bots=True)`
-   - `archive_context(message_id, channel_id=None, before=20, after=20)`
-   - `archive_channels(guild_id=None)`
-   - `archive_stats(guild_id=None)`
-   - `archive_attachment_meta(attachment_id)`
-   - `archive_read_attachment(attachment_id, max_bytes=...)` if bounded bytes
-     are needed. Do not let workers touch Nextcloud credentials or the DB directly.
-   - Test mode: archive queries are an explicit exception and may query real
-     data, per project decision. Keep a way to run deterministic tests with an
-     empty/temp DB if needed.
-2. **Attachment Range requests** — the stream endpoint currently sends whole
+1. **Attachment bytes for projects** — projects can inspect archive attachment
+   metadata but cannot read file bytes. Add a bounded `archive_read_attachment`
+   only if needed; decide between base64 over the JSON line protocol or a
+   core-materialized temp file. Never let workers touch Nextcloud credentials.
+2. **Attachment Range requests** — the web stream endpoint currently sends whole
    blobs; add HTTP Range support if large-video seeking is needed.
-3. **Deep-link to arbitrary message context** — the UI supports channel and time
-   window deep links; an `around=<message_id>` route can reuse `message_context`.
+3. **Deterministic archive tests** — test mode intentionally hits the real
+   archive. Add an explicit empty/temp-DB option if deterministic tests become
+   necessary.
 
 ### Recommended implementation order
 
-1. Add worker query names + framework functions, then extend `Manager._answer_query`
-   using the store methods above.
-2. Document the project-facing archive functions in `template.py`,
-   `agent-guide.md`, `i18n.js` cheatsheet and landing docs.
-3. Add the remaining tests: worker query roundtrip, test-mode behavior, deleted
-   messages absent, and attachment streaming/missing blob cases.
-4. Optional follow-ups: HTTP Range for attachment streaming and per-project
-   archive scoping in the worker bridge.
+1. Optional follow-ups: HTTP Range for attachment streaming, project attachment
+   bytes, and per-project archive scoping in the worker bridge.
+2. Add remaining regression tests: worker archive-query roundtrip (exists as a
+   manual smoke test now), deleted messages absent, attachment missing-blob case.
 
 ### Archive-specific gotchas
 
@@ -328,8 +335,8 @@ project-facing worker bridge below should call `query_messages`, `get_messages`,
 - Package env is shared (no per-project isolation); protected closure marks
   platform deps + transitive deps uninstallable.
 - Single shared access token; no per-user auth (trusted-friends deployment).
-- Project-facing archive queries are not implemented yet; the read-only web
-  explorer/API is available.
+- Project-facing archive queries are read-only and implemented through the
+  worker bridge; project attachment bytes and HTTP Range are still TODO.
 - Archive incremental sync cannot recover ancient edits or deletes that happened
   while the bot was offline; use the manual reconcile CLI.
 - Whole deleted channels/threads are not discoverable, so reconcile does not
