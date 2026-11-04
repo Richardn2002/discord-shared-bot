@@ -1702,6 +1702,10 @@ async function loadNewerMessages() {
 function archiveThreadTimelineEvents(items) {
   const st = archiveState;
   if (st.resultMode === "query" || st.allChannels || !st.channelId) return [];
+  const messageTimes = items.map((m) => Number(m.created_ts) || 0).filter((ts) => ts > 0);
+  if (!messageTimes.length) return [];
+  const minTs = Math.min(...messageTimes);
+  const maxTs = Math.max(...messageTimes);
   const represented = new Set();
   for (const m of items) {
     if (m.thread && m.thread.id) represented.add(String(m.thread.id));
@@ -1710,6 +1714,10 @@ function archiveThreadTimelineEvents(items) {
   for (const c of st.channels || []) {
     if (!c.is_thread || String(c.parent_id) !== String(st.channelId)) continue;
     if (!c.created_ts || represented.has(String(c.id))) continue;
+    // Only synthesize thread hints that fall inside the currently loaded
+    // message window; otherwise older threads pile up above the oldest
+    // loaded message and fill the screen when paging upward.
+    if (c.created_ts < minTs || c.created_ts > maxTs) continue;
     if (st.timeWindow &&
         (c.created_ts < st.timeWindow.after || c.created_ts > st.timeWindow.before)) continue;
     events.push({ ts: c.created_ts, kind: "thread", thread: c });
