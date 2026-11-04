@@ -41,6 +41,7 @@
     </nav>
     <span id="auth-badge" class="badge badge-muted" title="access">…</span>
     <span id="bot-status" class="badge badge-muted" title="bot status">loading…</span>
+    <span id="projects-status" class="badge badge-muted" title="project handlers">projects: …</span>
   </header>
 
   <main class="wrap">
@@ -112,7 +113,11 @@ archive_attachment_meta(attachment_id) -> dict or None</pre>
     <p class="dim" data-i18n="agents_hint"></p>
     <div class="oneliner">
       <button onclick="navigator.clipboard.writeText(document.getElementById('ol').textContent).then(()=>{this.textContent='copied!'})">copy</button>
-<pre id="ol">Read {{DOMAIN}}/static/agent-guide.md and use it to develop for my shared Discord bot at {{DOMAIN}}. My access token is "PASTE_TOKEN_HERE". Work on the project "PASTE_PROJECT_SLUG" (create it if it doesn't exist, with a fitting nickname). I want it to: DESCRIBE_WHAT_IT_SHOULD_DO_HERE. Test and debug everything through the API exactly like the guide says; only deploy once it works.</pre>
+<pre id="ol">Read {{DOMAIN}}/static/agent-guide.md and use it to develop for my shared Discord bot at {{DOMAIN}}. Test and debug everything through the API exactly like the guide says; only deploy once it works.
+
+Access token: "PASTE_TOKEN_HERE"
+What I want it to do: DESCRIBE_WHAT_IT_SHOULD_DO_HERE
+Project: "PASTE_PROJECT_SLUG" (create it if it doesn't exist, with a fitting nickname)</pre>
     </div>
 
     <h2 data-i18n="h_source"></h2>

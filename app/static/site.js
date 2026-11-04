@@ -78,6 +78,14 @@ function updateAuthBadge() {
   };
 }
 
+function setProjectsBadge(kind, text, title) {
+  const el = document.getElementById("projects-status");
+  if (!el) return;
+  el.className = `badge badge-${kind}`;
+  el.textContent = text;
+  el.title = title;
+}
+
 async function refreshBotStatus() {
   const el = document.getElementById("bot-status");
   if (!el) return;
@@ -87,6 +95,7 @@ async function refreshBotStatus() {
       el.className = "badge badge-muted";
       el.textContent = "bot: 🔒";
       el.title = "unlock to see bot status";
+      setProjectsBadge("muted", "projects: 🔒", "unlock to see whether project handlers are enabled");
       return;
     }
     const s = await res.json();
@@ -103,9 +112,17 @@ async function refreshBotStatus() {
       el.textContent = "bot: offline";
       el.title = "bot is configured but not connected";
     }
+    if (s.projects_enabled) {
+      setProjectsBadge("green", "projects: on",
+        "Project handlers are enabled — Discord events are dispatched to projects.");
+    } else {
+      setProjectsBadge("yellow", "projects: off",
+        "Archive-only mode: gateway events are archived, but no project handlers run.");
+    }
   } catch {
     el.className = "badge badge-red";
     el.textContent = "backend unreachable";
+    setProjectsBadge("red", "projects: ?", "backend unreachable");
   }
 }
 
