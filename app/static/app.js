@@ -1446,13 +1446,19 @@ function buildArchiveShell() {
   $view().replaceChildren(shell);
 }
 
+function archiveChannelHidden(c) {
+  // Guild-only / protected channels outside categories are not part of the
+  // user-facing archive browser.
+  return !c.is_thread && c.type !== 4 && !c.parent_id;
+}
+
 function refreshChannelList() {
   if (!archiveUi.channelList) return;
   const q = archiveState.channelQuery.trim().toLowerCase();
-  const channels = archiveState.channels.filter((c) => c.guild_id === archiveState.guildId);
+  const channels = archiveState.channels.filter((c) =>
+    c.guild_id === archiveState.guildId && !archiveChannelHidden(c));
   const visible = (c) => !q || String(c.name || "").toLowerCase().includes(q) || String(c.id).includes(q);
   const cats = channels.filter((c) => c.type === 4).sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
-  const catIds = new Set(cats.map((c) => c.id));
   const top = channels.filter((c) => !c.is_thread && c.type !== 4);
   const threads = channels.filter((c) => c.is_thread);
   const byParent = {};
@@ -1501,19 +1507,9 @@ function refreshChannelList() {
 
   const groups = cats.map((cat) => ({ cat, chans: top.filter((c) => c.parent_id === cat.id) }))
     .filter((g) => g.chans.some(visible) || threads.some((t) => visible(t) && g.chans.some((c) => c.id === t.parent_id)));
-  const orphan = top.filter((c) => !c.parent_id || !catIds.has(c.parent_id));
   for (const { cat, chans } of groups) {
     children.push(h("div", { class: "archive-channel-cat" }, cat.name || "Channels"));
     for (const c of chans.filter(visible)) {
-      children.push(row(c, 0));
-      if (archiveState.threadOpen.has(c.id)) {
-        for (const t of (byParent[c.id] || []).filter(visible)) children.push(row(t, 1));
-      }
-    }
-  }
-  if (orphan.filter(visible).length) {
-    children.push(h("div", { class: "archive-channel-cat" }, "Other"));
-    for (const c of orphan.filter(visible)) {
       children.push(row(c, 0));
       if (archiveState.threadOpen.has(c.id)) {
         for (const t of (byParent[c.id] || []).filter(visible)) children.push(row(t, 1));
@@ -2122,8 +2118,9 @@ function archiveValueControl(node, spec) {
   if (node.field === "channel_id") {
     return h("select", { onchange: (e) => { node.value = e.target.value; } },
       h("option", { value: "" }, "any channel"),
-      archiveState.channels.map((c) => h("option", { value: c.id, selected: String(c.id) === String(node.value) ? "" : null },
-        `${c.is_thread ? "🧵 " : "# "}${c.name || c.id}`)));
+      archiveState.channels.filter((c) => !archiveChannelHidden(c)).map((c) =>
+        h("option", { value: c.id, selected: String(c.id) === String(node.value) ? "" : null },
+          `${c.is_thread ? "🧵 " : "# "}${c.name || c.id}`)));
   }
   if (node.field === "guild_id") {
     return h("select", { onchange: (e) => { node.value = e.target.value; } },

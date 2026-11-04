@@ -52,12 +52,18 @@ def _channel_payload(channel, guild_id: int | None) -> dict:
     archived = bool(getattr(channel, "archived", False))
     if meta is not None:
         archived = bool(getattr(meta, "archived", archived))
+    parent_id = getattr(channel, "parent_id", None)
+    if parent_id is None:
+        # discord.py TextChannel/VoiceChannel use category_id; Threads use
+        # parent_id. Live events used to overwrite text-channel parents with
+        # None and push them into the UI's "Other" bucket.
+        parent_id = getattr(channel, "category_id", None)
     return {
         "id": channel.id,
         "guild_id": guild_id,
         "name": getattr(channel, "name", None),
         "type": ctype,
-        "parent_id": getattr(channel, "parent_id", None),
+        "parent_id": parent_id,
         "position": getattr(channel, "position", None),
         "thread_metadata": {
             "archived": archived,
