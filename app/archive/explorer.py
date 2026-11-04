@@ -129,6 +129,33 @@ def _forward_payload(raw: dict, *, string_ids: bool) -> dict | None:
     }
 
 
+def _thread_payload(raw: dict, row: dict, *, string_ids: bool) -> dict | None:
+    thread = raw.get("thread")
+    if not isinstance(thread, dict):
+        ref = raw.get("message_reference") or {}
+        if row.get("message_type") != 18 or not ref.get("channel_id"):
+            return None
+        thread = {
+            "id": ref.get("channel_id"),
+            "name": raw.get("content"),
+            "parent_id": row.get("channel_id"),
+            "type": 11,
+        }
+    tid = thread.get("id")
+    if tid is None:
+        return None
+    meta = thread.get("thread_metadata") or {}
+    return {
+        "id": _sid(tid, string_ids),
+        "name": thread.get("name") or raw.get("content"),
+        "parent_id": _sid(thread.get("parent_id"), string_ids),
+        "type": thread.get("type"),
+        "message_count": thread.get("message_count"),
+        "member_count": thread.get("member_count"),
+        "archived": bool(meta.get("archived")) if isinstance(meta, dict) else None,
+    }
+
+
 def message_payload(row: dict, attachments=None, reply=None, *,
                     string_ids: bool = True) -> dict:
     raw = {}
@@ -141,6 +168,9 @@ def message_payload(row: dict, attachments=None, reply=None, *,
     embeds = _embeds_payload(raw)
     mentions = _mentions_payload(raw, string_ids=string_ids)
     forward = _forward_payload(raw, string_ids=string_ids)
+    thread = _thread_payload(raw, row, string_ids=string_ids)
+    interaction = raw.get("interaction") or raw.get("interaction_metadata") or {}
+    interaction_name = interaction.get("name") if isinstance(interaction, dict) else None
     reply_to = None
     if reply:
         reply_to = {
@@ -183,6 +213,8 @@ def message_payload(row: dict, attachments=None, reply=None, *,
         "mentions": mentions,
         "mention_roles": [str(r) for r in (raw.get("mention_roles") or [])],
         "forward": forward,
+        "thread": thread,
+        "interaction_name": interaction_name,
         "attachments": [attachment_payload(a, string_ids=string_ids)
                         for a in (attachments or [])],
         "embeds": embeds,
@@ -279,6 +311,7 @@ def channels(store, guild_id=None, *, string_ids: bool = True) -> list[dict]:
             row["id"] = _sid(row.get("id"), string_ids)
             row["guild_id"] = _sid(row.get("guild_id"), string_ids)
             row["parent_id"] = _sid(row.get("parent_id"), string_ids)
+            row["owner_id"] = _sid(row.get("owner_id"), string_ids)
     return rows
 
 

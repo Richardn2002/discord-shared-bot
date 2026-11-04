@@ -109,7 +109,9 @@ They also include `mentions[{id,name,display_name,is_bot}]`, `mention_everyone`,
 `mention_roles`, `reference_type` (`0` reply, `1` forward),
 `reference_guild_id`, and `forward` for forwarded snapshots
 (`message_id`, `channel_id`, `guild_id`, `content`, `timestamp`, `author`,
-`mentions`, `embeds`, `attachments`).
+`mentions`, `embeds`, `attachments`). Thread/system messages also expose
+`thread{id,name,parent_id,type,message_count,member_count,archived}` and
+`interaction_name` for command responses.
 IDs are integers in project code. Search responses also carry `next_cursor`,
 `has_more`, `total` and `order`.
 

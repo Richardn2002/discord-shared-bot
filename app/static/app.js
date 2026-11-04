@@ -1703,6 +1703,41 @@ async function loadNewerMessages() {
   refreshMessageHeader();
 }
 
+function archiveThreadTimelineEvents(items) {
+  const st = archiveState;
+  if (st.resultMode === "query" || st.allChannels || !st.channelId) return [];
+  const represented = new Set();
+  for (const m of items) {
+    if (m.thread && m.thread.id) represented.add(String(m.thread.id));
+  }
+  const events = [];
+  for (const c of st.channels || []) {
+    if (!c.is_thread || String(c.parent_id) !== String(st.channelId)) continue;
+    if (!c.created_ts || represented.has(String(c.id))) continue;
+    if (st.timeWindow &&
+        (c.created_ts < st.timeWindow.after || c.created_ts > st.timeWindow.before)) continue;
+    events.push({ ts: c.created_ts, kind: "thread", thread: c });
+  }
+  return events;
+}
+
+function archiveThreadHint(t, cls) {
+  const owner = (archiveState.users || []).find((u) => String(u.id) === String(t.owner_id));
+  const name = owner ? (owner.display_name || owner.name) : "Someone";
+  return h("div", { class: cls || "system-message" },
+    h("span", { class: "system-icon" }, "🧵"),
+    h("span", null, `${name} started a thread `,
+      h("a", {
+        class: "system-link",
+        href: `#/archive?channel=${encodeURIComponent(t.id)}`,
+      }, `#${t.name || t.id}`)),
+    h("span", { class: "dim" }, ` · ${t.message_count || 0} messages`));
+}
+
+function archiveThreadEvent(t) {
+  return archiveThreadHint(t, "archive-thread-event");
+}
+
 function renderMessageList(reset) {
   if (!archiveUi.msgList) return;
   const st = archiveState;
@@ -1717,14 +1752,28 @@ function renderMessageList(reset) {
         else await refreshMessages(false);
       } }, chronological ? "↑ load older messages" : "↓ load more results")));
   }
+  const timeline = chronological
+    ? items.map((m) => ({ ts: m.created_ts || 0, kind: "message", data: m }))
+        .concat(archiveThreadTimelineEvents(items))
+        .sort((a, b) => (a.ts - b.ts) ||
+          String(a.kind === "thread" ? a.thread.id : a.data.id)
+            .localeCompare(String(b.kind === "thread" ? b.thread.id : b.data.id)))
+    : items.map((m) => ({ ts: m.created_ts || 0, kind: "message", data: m }));
   let prev = null;
   let prevDate = null;
-  for (const m of items) {
-    const day = new Date((m.created_ts || 0) * 1000).toDateString();
+  for (const event of timeline) {
+    const ts = event.kind === "thread" ? event.thread.created_ts : event.data.created_ts;
+    const day = new Date((ts || 0) * 1000).toDateString();
     if (day !== prevDate) {
-      nodes.push(h("div", { class: "archive-date-sep" }, archiveFmtDate(m.created_ts)));
+      nodes.push(h("div", { class: "archive-date-sep" }, archiveFmtDate(ts)));
       prevDate = day; prev = null;
     }
+    if (event.kind === "thread") {
+      nodes.push(archiveThreadEvent(event.thread));
+      prev = null;
+      continue;
+    }
+    const m = event.data;
     const same = prev && prev.author && m.author && prev.author.id === m.author.id &&
       Math.abs((m.created_ts || 0) - (prev.created_ts || 0)) < 7 * 60 &&
       !m.reply_to && !(m.attachments || []).length;
@@ -1794,7 +1843,12 @@ function archiveMessageRow(m, grouped, terms) {
       h("span", { class: "dim" }, `↪ ${m.reply_to.author_name || "unknown"}: `),
       h("span", { html: archiveFormatText(m.reply_to.content || "(no text)", terms, m) })));
   }
-  if (m.content) body.append(h("div", { class: "msg-content", html: archiveFormatText(m.content, terms, m) }));
+  const system = archiveSystemMessage(m, terms);
+  if (system) body.append(system);
+  const hideSystemContent = new Set([4, 6, 7, 18, 21, 46]);
+  if (m.content && (!system || !hideSystemContent.has(m.message_type))) {
+    body.append(h("div", { class: "msg-content", html: archiveFormatText(m.content, terms, m) }));
+  }
   if (m.forward) {
     const card = archiveForwardCard(m, terms);
     if (card) body.append(card);
@@ -1822,9 +1876,75 @@ function archiveMessageRow(m, grouped, terms) {
     const card = archiveEmbedCard(e);
     if (card) body.append(card);
   }
+  if (m.thread && m.message_type !== 18 &&
+      String(m.channel_id) === String(m.thread.parent_id)) {
+    body.append(archiveThreadHint({
+      ...m.thread,
+      owner_id: m.thread.owner_id || (m.author && m.author.id),
+    }, "system-message thread-attached"));
+  }
   const isAnchor = String(m.id) === String(archiveState.anchorMessageId);
   return h("div", { class: `msg-row${grouped ? " grouped" : ""}${m.pinned ? " pinned" : ""}${isAnchor ? " anchor" : ""}`,
     "data-mid": m.id }, avatar, body);
+}
+
+function archiveSystemMessage(m, terms) {
+  const type = m.message_type;
+  const name = (m.author && (m.author.display_name || m.author.name)) || "someone";
+  const parent = m.thread && archiveState.channels.find((c) => String(c.id) === String(m.thread.parent_id));
+  const channelName = parent ? `#${parent.name}` : "this channel";
+  if (type === 18 && m.thread) {
+    const threadName = m.thread.name || m.content || "thread";
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "🧵"),
+      h("span", null, `${name} started a thread `,
+        h("a", {
+          class: "system-link", href: `#/archive?channel=${encodeURIComponent(m.thread.id)}`,
+        }, `#${threadName}`),
+        ` in ${channelName}`),
+      m.thread.message_count != null ? h("span", { class: "dim" }, ` · ${m.thread.message_count} messages`) : null);
+  }
+  if (type === 21) {
+    const target = m.reply_to ? {
+      id: m.reference_message_id || m.reply_to.id,
+      channel_id: m.reference_channel_id || m.channel_id,
+      guild_id: m.reference_guild_id || m.guild_id,
+    } : null;
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "🧵"),
+      h("span", null, "Thread started from this message"),
+      target ? h("button", {
+        class: "system-link", onclick: () => jumpToOriginalMessage(target),
+      }, "jump to original") : null);
+  }
+  if (type === 7) {
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "👋"),
+      h("span", null, `${name} joined the server.`));
+  }
+  if (type === 6) {
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "📌"),
+      h("span", null, `${name} pinned a message in ${channelName}.`));
+  }
+  if (type === 4) {
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "✏️"),
+      h("span", null, `${name} changed the channel name to `,
+        h("strong", null, m.content || "(empty)")));
+  }
+  if (type === 20) {
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "⚡"),
+      h("span", null, `${name} used `,
+        h("span", { class: "mono" }, m.interaction_name ? `/${m.interaction_name}` : "a command")));
+  }
+  if (type === 46) {
+    return h("div", { class: "system-message" },
+      h("span", { class: "system-icon" }, "📊"),
+      h("span", null, "Poll ended."));
+  }
+  return null;
 }
 
 function archiveForwardCard(m, terms) {
@@ -1860,7 +1980,8 @@ function archiveForwardCard(m, terms) {
 }
 
 function archiveEmbedCard(e) {
-  if (!e || (!e.title && !e.description && !e.image && !e.thumbnail)) return null;
+  if (!e || (!e.title && !e.description && !e.image && !e.thumbnail &&
+      !(e.fields || []).length)) return null;
   const color = typeof e.color === "number" ? `#${e.color.toString(16).padStart(6, "0")}` : null;
   const card = h("div", { class: "embed-card", style: color ? `border-left-color:${color}` : null });
   if (e.author && e.author.name) card.append(h("div", { class: "embed-author" },
@@ -1873,7 +1994,15 @@ function archiveEmbedCard(e) {
     e.fields.map((f) => h("div", { class: "embed-field" },
       h("div", { class: "fname" }, f.name || ""),
       h("div", { class: "fvalue", html: archiveLinkifyText(f.value || "") })))));
-  if (e.image && e.image.url) card.append(h("img", { class: "embed-image", src: e.image.url, loading: "lazy", alt: "" }));
+  if (e.image && e.image.url) {
+    card.append(h("img", { class: "embed-image", src: e.image.url, loading: "lazy", alt: "" }));
+  } else if (e.thumbnail && e.thumbnail.url) {
+    const imageOnly = !e.title && !e.description && !(e.fields || []).length;
+    card.append(h("img", {
+      class: imageOnly || e.type === "image" ? "embed-image" : "embed-thumb",
+      src: e.thumbnail.url, loading: "lazy", alt: "",
+    }));
+  }
   if (e.footer && e.footer.text) card.append(h("div", { class: "embed-footer" },
     e.footer.icon_url ? h("img", { src: e.footer.icon_url, alt: "" }) : null, e.footer.text));
   return card;

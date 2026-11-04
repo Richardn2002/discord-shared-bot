@@ -457,3 +457,22 @@ a.discord-mention:hover { background: rgba(88,101,242,.35); text-decoration: non
   font-size: 11.5px; cursor: pointer;
 }
 .forward-jump:hover { background: transparent; color: #c9d3ff; text-decoration: underline; }
+
+/* Discord system messages (thread started, joins, pins, etc.) */
+.system-message {
+  display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap;
+  margin: 2px 0 3px; color: var(--text-dim); font-size: 12.5px;
+}
+.system-icon { flex: 0 0 auto; }
+.system-link {
+  color: #9ab3ff; text-decoration: none; background: transparent;
+  border: none; padding: 0; font: inherit; cursor: pointer;
+}
+.system-link:hover { background: transparent; text-decoration: underline; }
+
+.archive-thread-event {
+  display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap;
+  padding: 4px 16px 4px 62px; color: var(--text-dim); font-size: 12.5px;
+}
+.archive-thread-event:hover { background: rgba(255,255,255,.025); }
+.thread-attached { margin-top: 6px; }

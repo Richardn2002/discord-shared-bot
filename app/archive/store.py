@@ -1047,14 +1047,29 @@ class ArchiveStore:
         with self._lock:
             rows = self.conn.execute(
                 """SELECT c.id, c.guild_id, c.name, c.type, c.parent_id,
-                          c.position, c.is_thread, c.archived,
+                          c.position, c.is_thread, c.archived, c.raw_json,
                           (SELECT COUNT(*) FROM messages m WHERE m.channel_id=c.id)
                               AS message_count,
+                          (SELECT MIN(m.created_ts) FROM messages m
+                           WHERE m.channel_id=c.id) AS first_ts,
                           (SELECT MAX(m.created_ts) FROM messages m
                            WHERE m.channel_id=c.id) AS last_ts
                    FROM channels c""" + where +
                 " ORDER BY c.guild_id, c.position, c.name", args).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for row in rows:
+            d = dict(row)
+            raw = {}
+            try:
+                raw = json.loads(d.pop("raw_json") or "{}")
+            except Exception:
+                raw = {}
+            meta = raw.get("thread_metadata") or {}
+            created = _iso_ts(meta.get("create_timestamp")) if isinstance(meta, dict) else None
+            d["created_ts"] = created or d.get("first_ts")
+            d["owner_id"] = raw.get("owner_id")
+            out.append(d)
+        return out
 
     def users(self, guild_id=None, q=None, limit=50) -> list[dict]:
         where, args = [], []
